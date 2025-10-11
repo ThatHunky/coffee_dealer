@@ -1,11 +1,14 @@
 """Calendar image renderer with Ukrainian locale."""
 
 import calendar
+import os
 from datetime import date, timedelta
 from io import BytesIO
+from pathlib import Path
 from typing import Optional
 
 from babel.dates import format_date
+from loguru import logger
 from PIL import Image, ImageDraw, ImageFont
 
 from .models import Assignment
@@ -32,6 +35,34 @@ class CalendarRenderer:
         # Set Monday as first day of week
         calendar.setfirstweekday(calendar.MONDAY)
 
+        # Get font paths
+        self.font_dir = Path(__file__).parent.parent / "fonts"
+        self.title_font_path = self.font_dir / "Roboto-Bold.ttf"
+        self.header_font_path = self.font_dir / "Roboto-Medium.ttf"
+        self.body_font_path = self.font_dir / "Roboto-Regular.ttf"
+
+        # Emoji font - use Symbola or DejaVu for better emoji support
+        # These fonts can render emoji glyphs (monochrome but visible)
+        emoji_font_paths = [
+            Path("/usr/share/fonts/truetype/ancient-scripts/Symbola_hint.ttf"),
+            Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+            Path("/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf"),
+            Path("/System/Library/Fonts/Apple Color Emoji.ttc"),
+            Path("C:/Windows/Fonts/seguiemj.ttf"),
+        ]
+
+        self.emoji_font_path = None
+        for path in emoji_font_paths:
+            if path.exists():
+                self.emoji_font_path = path
+                logger.info(f"Using emoji font: {path}")
+                break
+
+        # Fallback to body font if no emoji font found
+        if self.emoji_font_path is None:
+            self.emoji_font_path = self.body_font_path
+            logger.warning("No emoji font found, using body font as fallback")
+
     def render(
         self, year: int, month: int, assignments: Optional[list[Assignment]] = None
     ) -> BytesIO:
@@ -56,14 +87,15 @@ class CalendarRenderer:
         img = Image.new("RGB", (self.WIDTH, self.HEIGHT), self.BG_COLOR)
         draw = ImageDraw.Draw(img)
 
-        # Try to load a font, fallback to default
+        # Load fonts with proper Cyrillic support
         try:
-            title_font = ImageFont.truetype("arial.ttf", 48)
-            header_font = ImageFont.truetype("arial.ttf", 24)
-            day_font = ImageFont.truetype("arial.ttf", 20)
-            small_font = ImageFont.truetype("arial.ttf", 14)
-        except:
-            # Fallback to default font
+            title_font = ImageFont.truetype(str(self.title_font_path), 48)
+            header_font = ImageFont.truetype(str(self.header_font_path), 24)
+            day_font = ImageFont.truetype(str(self.body_font_path), 20)
+            small_font = ImageFont.truetype(str(self.body_font_path), 14)
+        except Exception as e:
+            # Fallback to default font if custom fonts not available
+            print(f"Warning: Could not load custom fonts: {e}")
             title_font = ImageFont.load_default()
             header_font = ImageFont.load_default()
             day_font = ImageFont.load_default()
@@ -120,18 +152,10 @@ class CalendarRenderer:
                 # Get assignment for this day
                 assignment = assignment_map.get(current_date)
 
-                # Draw cell background
-                if assignment:
-                    color = assignment.get_color()
-                    draw.rectangle(
-                        [x + 2, y + 2, x + cell_width - 2, y + cell_height - 2],
-                        fill=color,
-                        outline=self.GRID_COLOR,
-                    )
-                else:
-                    draw.rectangle(
-                        [x, y, x + cell_width, y + cell_height], outline=self.GRID_COLOR
-                    )
+                # Draw cell border
+                draw.rectangle(
+                    [x, y, x + cell_width, y + cell_height], outline=self.GRID_COLOR
+                )
 
                 # Highlight today
                 if current_date == today:
@@ -149,18 +173,43 @@ class CalendarRenderer:
                     (x + 10, y + 10), day_text, fill=self.TEXT_COLOR, font=day_font
                 )
 
-                # Draw names if assigned
+                # Draw emoji and names if assigned
                 if assignment:
+                    # Draw emoji using emoji font
+                    emoji = assignment.get_color()  # Now returns emoji
+                    try:
+                        # Use dedicated emoji font for proper rendering
+                        emoji_font = ImageFont.truetype(str(self.emoji_font_path), 32)
+                    except Exception as e:
+                        # Fallback to body font if emoji font not available
+                        try:
+                            emoji_font = ImageFont.truetype(
+                                str(self.body_font_path), 32
+                            )
+                        except Exception:
+                            emoji_font = day_font
+
+                    # Draw emoji (without embedded_color for better compatibility)
+                    draw.text(
+                        (x + cell_width - 45, y + 8),
+                        emoji,
+                        fill=self.TEXT_COLOR,
+                        font=emoji_font,
+                    )
+
+                    # Draw names
                     names = assignment.get_people_names()
                     names_text = ", ".join(names)
                     draw.text(
-                        (x + 10, y + 35),
+                        (x + 10, y + 45),
                         names_text,
                         fill=self.TEXT_COLOR,
                         font=small_font,
                     )
 
-        # Draw legend
+        # Draw legend (dynamic from user config with emojis)
+        from .user_manager import user_manager
+
         legend_y = self.HEIGHT - self.MARGIN - 120
         draw.text(
             (self.MARGIN, legend_y - 25),
@@ -169,27 +218,33 @@ class CalendarRenderer:
             font=header_font,
         )
 
-        legends = [
-            ("#4A90E2", "Діана"),
-            ("#9B59B6", "Дана"),
-            ("#27AE60", "Женя"),
-            ("#E91E63", "Діана+Женя"),
-            ("#F39C12", "Дана+Женя"),
-            ("#E74C3C", "Дана+Діана"),
-        ]
+        # Get dynamic legend from user manager (now returns emojis instead of colors)
+        legends = user_manager.get_all_colors_legend()
 
         legend_x = self.MARGIN
-        for color, label in legends:
-            # Draw color box
-            draw.rectangle(
-                [legend_x, legend_y, legend_x + 30, legend_y + 30],
-                fill=color,
-                outline=self.GRID_COLOR,
+        for emoji, label in legends:
+            # Draw emoji instead of color box using emoji font
+            try:
+                # Use dedicated emoji font for proper rendering
+                emoji_font = ImageFont.truetype(str(self.emoji_font_path), 28)
+            except Exception:
+                # Fallback to body font
+                try:
+                    emoji_font = ImageFont.truetype(str(self.body_font_path), 28)
+                except Exception:
+                    emoji_font = small_font
+
+            # Draw emoji (without embedded_color for better compatibility)
+            draw.text(
+                (legend_x, legend_y),
+                emoji,
+                fill=self.TEXT_COLOR,
+                font=emoji_font,
             )
 
             # Draw label
             draw.text(
-                (legend_x + 40, legend_y + 5),
+                (legend_x + 35, legend_y + 5),
                 label,
                 fill=self.TEXT_COLOR,
                 font=small_font,

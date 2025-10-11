@@ -9,7 +9,12 @@ Ukrainian Telegram bot for managing Coffee Dealer's work schedule with AI-powere
 - "постав Діану на 5 жовтня" → Assign Diana to October 5th
 - "хто працює 15 числа?" → Who works on the 15th?
 
-📅 **Visual Calendar** - PNG calendar with color-coded assignments
+� **AI Image Recognition** - Extract schedules from calendar photos
+- Upload calendar image → Automatic schedule extraction
+- Color recognition for staff assignments
+- Bulk import with confirmation (Admin only)
+
+�📅 **Visual Calendar** - PNG calendar with color-coded assignments
 - Monday-first week layout
 - Ukrainian month names (Babel)
 - Color legend for staff assignments
@@ -150,6 +155,21 @@ class NLCommand(BaseModel):
 if cmd.action == "assign_day" and not is_admin(user_id):
     return "Лише для адміністратора"
 ```
+
+## Documentation
+
+📚 **Complete documentation is available in the [`docs/`](docs/) directory:**
+
+- **[Quick Start Guide](docs/QUICKSTART.md)** - For end users
+- **[Admin Quick Start](docs/ADMIN_QUICKSTART.md)** - For administrators
+- **[Admin Guide](docs/ADMIN_GUIDE.md)** - Complete admin reference
+- **[Image Import Feature](docs/IMAGE_IMPORT_FEATURE.md)** - AI-powered schedule extraction from photos
+- **[Development Guide](docs/DEVELOPMENT.md)** - For contributors
+- **[Logging Guide](docs/LOGGING_GUIDE.md)** - Debugging and monitoring
+- **[Project Summary](docs/PROJECT_SUMMARY.md)** - Architecture overview
+- **[Feature Updates](docs/)** - All feature documentation
+
+See [docs/README.md](docs/README.md) for the complete documentation index.
 
 ## Testing
 

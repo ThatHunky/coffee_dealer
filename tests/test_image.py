@@ -27,31 +27,31 @@ def test_renderer_creates_image():
     assert img_data[:4] == b"\x89PNG"  # PNG magic bytes
 
 
-def test_assignment_colors():
-    """Test that assignments have correct colors."""
-    # Diana only -> blue
+def test_assignment_emojis():
+    """Test that assignments have correct emojis."""
+    # Diana only -> blue circle
     a1 = Assignment.from_people(date(2024, 10, 1), ["diana"])
-    assert a1.get_color() == "#4A90E2"
+    assert a1.get_color() == "🔵"
 
-    # Dana only -> purple
+    # Dana only -> purple circle
     a2 = Assignment.from_people(date(2024, 10, 2), ["dana"])
-    assert a2.get_color() == "#9B59B6"
+    assert a2.get_color() == "🟣"
 
-    # Zhenya only -> green
+    # Zhenya only -> green circle
     a3 = Assignment.from_people(date(2024, 10, 3), ["zhenya"])
-    assert a3.get_color() == "#27AE60"
+    assert a3.get_color() == "🟢"
 
-    # Diana + Zhenya -> pink
+    # Diana + Zhenya -> pink heart
     a4 = Assignment.from_people(date(2024, 10, 4), ["diana", "zhenya"])
-    assert a4.get_color() == "#E91E63"
+    assert a4.get_color() == "🩷"
 
-    # Dana + Zhenya -> yellow
+    # Dana + Zhenya -> yellow circle
     a5 = Assignment.from_people(date(2024, 10, 5), ["dana", "zhenya"])
-    assert a5.get_color() == "#F39C12"
+    assert a5.get_color() == "🟡"
 
-    # Dana + Diana -> red
+    # Dana + Diana -> red circle
     a6 = Assignment.from_people(date(2024, 10, 6), ["dana", "diana"])
-    assert a6.get_color() == "#E74C3C"
+    assert a6.get_color() == "🔴"
 
 
 def test_bitmask_mapping():
