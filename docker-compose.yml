@@ -1,0 +1,18 @@
+version: "3.8"
+
+services:
+  bot:
+    build: .
+    container_name: coffee-dealer-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    environment:
+      - DATABASE_URL=sqlite:///./data/schedule.db
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
