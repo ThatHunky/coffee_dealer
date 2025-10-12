@@ -177,7 +177,7 @@ Always ask yourself:
 ## 🎨 Current Features
 
 - ✅ Month navigation with inline keyboard (12-month limit)
-- ✅ Emoji legend system (🔵🟣🟢🔴🩷🟡🌈)
+- ✅ Emoji legend system (🔵🟣🟢🔴🟠🟡🌈)
 - ✅ Command hints for users and admins
 - ✅ Comprehensive error logging
 - ✅ AI-powered natural language parsing

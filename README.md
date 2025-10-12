@@ -27,6 +27,11 @@ Ukrainian Telegram bot for managing Coffee Dealer's work schedule with AI-powere
 
 🔒 **Admin Controls** - Secure role-based access for schedule modifications
 
+📝 **Comprehensive Logging** - File-based logging with 7-day retention
+- Daily log rotation at midnight
+- Automatic cleanup of old logs
+- Detailed error traces and audit trail
+
 ## Tech Stack
 
 - **Python 3.12+**
@@ -36,6 +41,7 @@ Ukrainian Telegram bot for managing Coffee Dealer's work schedule with AI-powere
 - **SQLModel + SQLite** - Database with type safety
 - **Pydantic** - JSON schema validation
 - **Babel** - Ukrainian locale support
+- **Loguru** - Advanced logging with rotation and retention
 
 ## Setup
 

@@ -38,6 +38,10 @@ env/
 data/
 !data/.gitkeep
 
+# Logs directory
+logs/
+!logs/.gitkeep
+
 # IDE
 .vscode/
 .idea/

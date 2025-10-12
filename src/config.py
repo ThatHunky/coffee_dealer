@@ -24,6 +24,12 @@ class Config:
     TZ: str = os.getenv("TZ", "Europe/Kyiv")
     DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./schedule.db")
 
+    # Logging
+    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
+    LOG_DIR: str = os.getenv("LOG_DIR", "logs")
+    LOG_RETENTION: str = os.getenv("LOG_RETENTION", "7 days")
+    LOG_ROTATION: str = os.getenv("LOG_ROTATION", "00:00")  # Rotate at midnight
+
     @classmethod
     def validate(cls) -> None:
         """Validate required configuration."""

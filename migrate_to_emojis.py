@@ -17,7 +17,7 @@ COLOR_TO_EMOJI = {
     "#9B59B6": "🟣",  # Purple -> Purple circle
     "#27AE60": "🟢",  # Green -> Green circle
     "#E74C3C": "🔴",  # Red -> Red circle
-    "#E91E63": "🩷",  # Pink -> Pink heart
+    "#E91E63": "🟠",  # Pink -> Orange circle
     "#F39C12": "🟡",  # Orange -> Yellow circle
     "#95A5A6": "⚫",  # Gray -> Black circle (default)
 }

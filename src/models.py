@@ -135,7 +135,7 @@ class CombinationColor(SQLModel, table=True):
         """Create default combination emojis."""
         return [
             cls(mask=3, emoji="🔴", label_uk="Дана+Діана"),  # 0b011
-            cls(mask=5, emoji="🩷", label_uk="Діана+Женя"),  # 0b101
+            cls(mask=5, emoji="🟠", label_uk="Діана+Женя"),  # 0b101
             cls(mask=6, emoji="🟡", label_uk="Дана+Женя"),  # 0b110
         ]
 

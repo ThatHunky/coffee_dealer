@@ -10,6 +10,7 @@ from typing import Optional
 from babel.dates import format_date
 from loguru import logger
 from PIL import Image, ImageDraw, ImageFont
+from pilmoji import Pilmoji
 
 from .models import Assignment
 from .repo import repo
@@ -41,14 +42,13 @@ class CalendarRenderer:
         self.header_font_path = self.font_dir / "Roboto-Medium.ttf"
         self.body_font_path = self.font_dir / "Roboto-Regular.ttf"
 
-        # Emoji font - use Symbola or DejaVu for better emoji support
-        # These fonts can render emoji glyphs (monochrome but visible)
+        # Emoji font path preference (Pilmoji can handle color emoji fonts)
         emoji_font_paths = [
-            Path("/usr/share/fonts/truetype/ancient-scripts/Symbola_hint.ttf"),
-            Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
             Path("/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf"),
             Path("/System/Library/Fonts/Apple Color Emoji.ttc"),
             Path("C:/Windows/Fonts/seguiemj.ttf"),
+            Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+            Path("/usr/share/fonts/truetype/ancient-scripts/Symbola_hint.ttf"),
         ]
 
         self.emoji_font_path = None
@@ -58,10 +58,8 @@ class CalendarRenderer:
                 logger.info(f"Using emoji font: {path}")
                 break
 
-        # Fallback to body font if no emoji font found
         if self.emoji_font_path is None:
-            self.emoji_font_path = self.body_font_path
-            logger.warning("No emoji font found, using body font as fallback")
+            logger.warning("No emoji font found; Pilmoji will use default fallback")
 
     def render(
         self, year: int, month: int, assignments: Optional[list[Assignment]] = None
@@ -86,20 +84,126 @@ class CalendarRenderer:
         # Create image
         img = Image.new("RGB", (self.WIDTH, self.HEIGHT), self.BG_COLOR)
         draw = ImageDraw.Draw(img)
+        pilmoji = Pilmoji(img)
 
         # Load fonts with proper Cyrillic support
+        # Try custom Roboto fonts first, then fallback to DejaVu Sans (has Cyrillic)
+        fallback_font_paths = [
+            Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+            Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+            Path("/System/Library/Fonts/Helvetica.ttc"),
+            Path("C:/Windows/Fonts/arial.ttf"),
+        ]
+
+        # Find a fallback font with Cyrillic support
+        fallback_font = None
+        for fpath in fallback_font_paths:
+            if fpath.exists():
+                fallback_font = fpath
+                logger.info(f"Found fallback font: {fpath}")
+                break
+
         try:
-            title_font = ImageFont.truetype(str(self.title_font_path), 48)
-            header_font = ImageFont.truetype(str(self.header_font_path), 24)
-            day_font = ImageFont.truetype(str(self.body_font_path), 20)
-            small_font = ImageFont.truetype(str(self.body_font_path), 14)
+            # Try Roboto fonts for text
+            if self.title_font_path.exists():
+                title_font = ImageFont.truetype(str(self.title_font_path), 48)
+            else:
+                title_font = (
+                    ImageFont.truetype(str(fallback_font), 48)
+                    if fallback_font
+                    else ImageFont.load_default()
+                )
+                logger.warning(f"Title font not found, using fallback")
+
+            if self.header_font_path.exists():
+                header_font = ImageFont.truetype(str(self.header_font_path), 24)
+            else:
+                header_font = (
+                    ImageFont.truetype(str(fallback_font), 24)
+                    if fallback_font
+                    else ImageFont.load_default()
+                )
+                logger.warning(f"Header font not found, using fallback")
+
+            if self.body_font_path.exists():
+                day_font = ImageFont.truetype(str(self.body_font_path), 20)
+                small_font = ImageFont.truetype(str(self.body_font_path), 14)
+            else:
+                day_font = (
+                    ImageFont.truetype(str(fallback_font), 20)
+                    if fallback_font
+                    else ImageFont.load_default()
+                )
+                small_font = (
+                    ImageFont.truetype(str(fallback_font), 14)
+                    if fallback_font
+                    else ImageFont.load_default()
+                )
+                logger.warning(f"Body font not found, using fallback")
+
+            # Emoji font: NotoColorEmoji is a bitmap font with fixed sizes (16, 24, 32, 48, 64, 72, 96, 109, 128)
+            # Use closest supported sizes: 48 for cells, 32 for legend
+            if self.emoji_font_path:
+                try:
+                    emoji_cell_font = ImageFont.truetype(str(self.emoji_font_path), 48)
+                    emoji_legend_font = ImageFont.truetype(
+                        str(self.emoji_font_path), 32
+                    )
+                except Exception as e:
+                    logger.warning(f"Could not load emoji font with bitmap sizes: {e}")
+                    # Fallback to text font for emoji
+                    emoji_cell_font = ImageFont.truetype(
+                        str(
+                            self.body_font_path
+                            if self.body_font_path.exists()
+                            else fallback_font
+                        ),
+                        48,
+                    )
+                    emoji_legend_font = ImageFont.truetype(
+                        str(
+                            self.body_font_path
+                            if self.body_font_path.exists()
+                            else fallback_font
+                        ),
+                        32,
+                    )
+            else:
+                # If no emoji font, use Roboto/fallback for emoji too
+                emoji_cell_font = ImageFont.truetype(
+                    str(
+                        self.body_font_path
+                        if self.body_font_path.exists()
+                        else fallback_font
+                    ),
+                    48,
+                )
+                emoji_legend_font = ImageFont.truetype(
+                    str(
+                        self.body_font_path
+                        if self.body_font_path.exists()
+                        else fallback_font
+                    ),
+                    32,
+                )
+
         except Exception as e:
-            # Fallback to default font if custom fonts not available
-            print(f"Warning: Could not load custom fonts: {e}")
-            title_font = ImageFont.load_default()
-            header_font = ImageFont.load_default()
-            day_font = ImageFont.load_default()
-            small_font = ImageFont.load_default()
+            # Last resort: use fallback font or default
+            logger.error(f"Error loading fonts: {e}", exc_info=True)
+            if fallback_font:
+                title_font = ImageFont.truetype(str(fallback_font), 48)
+                header_font = ImageFont.truetype(str(fallback_font), 24)
+                day_font = ImageFont.truetype(str(fallback_font), 20)
+                small_font = ImageFont.truetype(str(fallback_font), 14)
+                emoji_cell_font = ImageFont.truetype(str(fallback_font), 48)
+                emoji_legend_font = ImageFont.truetype(str(fallback_font), 32)
+            else:
+                title_font = ImageFont.load_default()
+                header_font = ImageFont.load_default()
+                day_font = ImageFont.load_default()
+                small_font = ImageFont.load_default()
+                emoji_cell_font = day_font
+                emoji_legend_font = small_font
 
         # Draw title (month name in Ukrainian)
         month_name = format_date(date(year, month, 1), "LLLL yyyy", locale="uk")
@@ -175,33 +279,27 @@ class CalendarRenderer:
 
                 # Draw emoji and names if assigned
                 if assignment:
-                    # Draw emoji using emoji font
-                    emoji = assignment.get_color()  # Now returns emoji
-                    try:
-                        # Use dedicated emoji font for proper rendering
-                        emoji_font = ImageFont.truetype(str(self.emoji_font_path), 32)
-                    except Exception as e:
-                        # Fallback to body font if emoji font not available
-                        try:
-                            emoji_font = ImageFont.truetype(
-                                str(self.body_font_path), 32
-                            )
-                        except Exception:
-                            emoji_font = day_font
-
-                    # Draw emoji (without embedded_color for better compatibility)
-                    draw.text(
-                        (x + cell_width - 45, y + 8),
+                    # Draw emoji using Pilmoji (color emoji support)
+                    emoji = assignment.get_color()
+                    # Center the emoji horizontally in the cell, near the top, with more vertical space
+                    emoji_x = x + (cell_width // 2)
+                    emoji_y = y + 18  # move emoji a bit lower for balance
+                    pilmoji.text(
+                        (
+                            emoji_x - 24,
+                            emoji_y,
+                        ),  # 24 = half of font size 48 for centering
                         emoji,
                         fill=self.TEXT_COLOR,
-                        font=emoji_font,
+                        font=emoji_cell_font,
                     )
 
-                    # Draw names
+                    # Draw names, further below emoji for clarity
                     names = assignment.get_people_names()
                     names_text = ", ".join(names)
+                    name_y = emoji_y + 48  # 48px below emoji top
                     draw.text(
-                        (x + 10, y + 45),
+                        (x + 10, name_y),
                         names_text,
                         fill=self.TEXT_COLOR,
                         font=small_font,
@@ -223,37 +321,26 @@ class CalendarRenderer:
 
         legend_x = self.MARGIN
         for emoji, label in legends:
-            # Draw emoji instead of color box using emoji font
-            try:
-                # Use dedicated emoji font for proper rendering
-                emoji_font = ImageFont.truetype(str(self.emoji_font_path), 28)
-            except Exception:
-                # Fallback to body font
-                try:
-                    emoji_font = ImageFont.truetype(str(self.body_font_path), 28)
-                except Exception:
-                    emoji_font = small_font
-
-            # Draw emoji (without embedded_color for better compatibility)
-            draw.text(
-                (legend_x, legend_y),
+            # Use Pilmoji for legend emojis too, larger font
+            pilmoji.text(
+                (legend_x, legend_y - 2),  # slightly higher for better alignment
                 emoji,
                 fill=self.TEXT_COLOR,
-                font=emoji_font,
+                font=emoji_legend_font,
             )
 
-            # Draw label
+            # Draw label, more spacing from emoji, vertically centered
             draw.text(
-                (legend_x + 35, legend_y + 5),
+                (legend_x + 62, legend_y + 10),
                 label,
                 fill=self.TEXT_COLOR,
                 font=small_font,
             )
 
-            legend_x += 200
-            if legend_x > self.WIDTH - 200:
+            legend_x += 270
+            if legend_x > self.WIDTH - 270:
                 legend_x = self.MARGIN
-                legend_y += 40
+                legend_y += 60
 
         # Save to BytesIO
         output = BytesIO()

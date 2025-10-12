@@ -98,15 +98,70 @@ class UserManager:
 
         # Check for combination emoji first
         if mask in self._combo_cache:
-            return self._combo_cache[mask].emoji
+            return self._normalize_emoji(self._combo_cache[mask].emoji)
 
         # Check for solo user emoji
         for user in self._user_cache.values():
             if mask == (1 << user.bit_position):
-                return user.emoji
+                return self._normalize_emoji(user.emoji)
 
         # Default emoji for unknown combinations
         return "⚫"
+
+    def _normalize_emoji(self, emoji: str) -> str:
+        """Normalize emojis to widely supported, colorful variants.
+
+        - Map unsupported or 'just square' emojis (e.g., ⚫, ◼, ⬛, ▪, ▫, ▫️, ◻️, ◽, ◾, ▫️, etc.) to colored hearts.
+        - Keep colored circles and hearts as is.
+        """
+        # List of 'just square' or generic/unsupported emojis
+        square_emojis = {
+            "⚫",
+            "◼",
+            "⬛",
+            "▪",
+            "▫",
+            "◻",
+            "◻️",
+            "◽",
+            "◾",
+            "▫️",
+            "⬜",
+            "⬜️",
+            "□",
+            "■",
+            "▪️",
+            "▫️",
+        }
+        # List of colored hearts to cycle through
+        colored_hearts = ["💗", "💙", "💚", "💛", "💜", "🧡", "❤️"]
+        mapping = {
+            "🟠": "�",  # Orange circle (keep)
+            "🟣": "🟣",  # Purple circle (keep)
+            "🔵": "🔵",  # Blue circle (keep)
+            "🟢": "🟢",  # Green circle (keep)
+            "🔴": "🔴",  # Red circle (keep)
+            "🟡": "🟡",  # Yellow circle (keep)
+            "❤️": "❤️",  # Red heart (keep)
+            "💗": "💗",  # Pink heart (keep)
+            "💙": "💙",  # Blue heart (keep)
+            "💚": "💚",  # Green heart (keep)
+            "💛": "💛",  # Yellow heart (keep)
+            "💜": "💜",  # Purple heart (keep)
+            "🧡": "🧡",  # Orange heart (keep)
+        }
+        # If it's a known mapping, use it
+        if emoji in mapping:
+            return mapping[emoji]
+        # If it's a square/unsupported, pick a colored heart based on hash
+        if emoji in square_emojis or emoji in {"⚫", "⚪"}:
+            # Deterministically pick a heart for variety
+            idx = abs(hash(emoji)) % len(colored_hearts)
+            return colored_hearts[idx]
+        # If it's a single char and not in mapping, default to 💗
+        if len(emoji) == 1 and not emoji.isalnum():
+            return "💗"
+        return emoji
 
     def update_user(
         self,

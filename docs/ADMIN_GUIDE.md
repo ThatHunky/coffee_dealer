@@ -18,7 +18,80 @@ Admins can set custom colors for individual users and their combinations.
 
 When an admin modifies the schedule, all other admins receive automatic notifications about the change.
 
+### 4. Interactive Button-Based Assignment ⭐ NEW
+
+Use the `/assign` command to visually select dates and assign users with easy-to-use buttons - no typing required! See detailed guide in [INTERACTIVE_ASSIGNMENT_FEATURE.md](INTERACTIVE_ASSIGNMENT_FEATURE.md).
+
+### 5. Interactive User Editor ⭐ NEW
+
+Use the `/editusers` command to manage users through an intuitive menu system - edit names, emojis, and status with buttons! See detailed guide in [INTERACTIVE_USER_EDITOR_FEATURE.md](INTERACTIVE_USER_EDITOR_FEATURE.md).
+
 ## Admin Commands
+
+### `/assign` - Interactive Assignment (NEW) ⭐
+
+Assign users to dates using an intuitive calendar interface with buttons.
+
+**How it works:**
+1. Type `/assign` to start
+2. Select a date from the calendar
+3. Toggle users on/off with checkboxes
+4. Click ✅ to save or 🗑️ to clear
+
+**Features:**
+- Visual calendar with week layout
+- See existing assignments with emojis
+- Navigate between months
+- Multi-user selection
+- No typing needed!
+
+**Example workflow:**
+```
+/assign
+→ [Calendar appears]
+→ Click on "15"
+→ [User selection appears]
+→ Click "🔵 Діана"
+→ Click "✅ Зберегти"
+→ ✅ Призначено на 15.10.2025: Діана
+```
+
+See full documentation: [INTERACTIVE_ASSIGNMENT_FEATURE.md](INTERACTIVE_ASSIGNMENT_FEATURE.md)
+
+---
+
+### `/editusers` - Interactive User Editor (NEW) ⭐
+
+Edit users through an intuitive button-based interface.
+
+**How it works:**
+1. Type `/editusers` to start
+2. Select a user from the list
+3. Choose what to edit (name, emoji, status)
+4. Type the new value or toggle status
+5. Done! User is updated
+
+**Features:**
+- Visual user list with status
+- Edit any field easily
+- Add new users with wizard
+- One-click activate/deactivate
+- Step-by-step guidance
+
+**Example workflow:**
+```
+/editusers
+→ [User list appears]
+→ Click "✅ 🔵 Діана"
+→ [Edit menu appears]
+→ Click "🔵 Змінити емодзі"
+→ Type "💙"
+→ ✅ Поле оновлено!
+```
+
+See full documentation: [INTERACTIVE_USER_EDITOR_FEATURE.md](INTERACTIVE_USER_EDITOR_FEATURE.md)
+
+---
 
 ### `/users` - List All Users
 

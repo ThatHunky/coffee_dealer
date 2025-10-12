@@ -41,9 +41,9 @@ def test_assignment_emojis():
     a3 = Assignment.from_people(date(2024, 10, 3), ["zhenya"])
     assert a3.get_color() == "🟢"
 
-    # Diana + Zhenya -> pink heart
+    # Diana + Zhenya -> orange circle
     a4 = Assignment.from_people(date(2024, 10, 4), ["diana", "zhenya"])
-    assert a4.get_color() == "🩷"
+    assert a4.get_color() == "🟠"
 
     # Dana + Zhenya -> yellow circle
     a5 = Assignment.from_people(date(2024, 10, 5), ["dana", "zhenya"])

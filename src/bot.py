@@ -36,6 +36,14 @@ router = Router()
 # Key: user_id, Value: ScheduleFromImage
 pending_schedule_imports: dict[int, "ScheduleFromImage"] = {}
 
+# In-memory storage for interactive assignment sessions
+# Key: user_id, Value: dict with 'year', 'month', 'day', 'selected_users' (set of user names)
+assignment_sessions: dict[int, dict] = {}
+
+# In-memory storage for interactive user editing sessions
+# Key: user_id, Value: dict with 'user_config', 'field_to_edit', 'new_value'
+user_edit_sessions: dict[int, dict] = {}
+
 
 def is_admin(user_id: int) -> bool:
     """Check if user is admin."""
@@ -253,10 +261,10 @@ async def cmd_help(message: Message, **kwargs):
             '• "Діана на всі будні"\n'
             '• "Дана на весь жовтень"\n'
             '• "дану та діану на всі неділі" (декілька людей)\n\n'
-            "� Імпорт з зображення (адмін):\n"
+            "📥 Імпорт з зображення (адмін):\n"
             "• Надішліть фото календаря, і бот автоматично розпізнає розклад\n"
-            "• Працює з кольоровими календарями (🔵🟣🟢🔴🩷🟡)\n\n"
-            "�🛠 Команди адміністратора:\n"
+            "• Працює з кольоровими календарями (🔵🟣🟢🔴🟠🟡)\n\n"
+            "🛠 Команди адміністратора:\n"
             "• /users — список користувачів\n"
             "• /adduser — додати/оновити користувача\n"
             "• /edituser — редагувати користувача\n"
@@ -484,7 +492,20 @@ async def handle_assign_days(message: Message, cmd: NLCommand):
             f"📊 Кількість днів: {len(cmd.days)}"
         )
 
-        await message.answer(response, reply_markup=get_main_keyboard())
+        logger.info(
+            f"Multiple days assigned by admin {message.from_user.id}",
+            month=f"{year}-{month:02d}",
+            days=sorted(cmd.days),
+            people=names,
+        )
+
+        try:
+            await message.answer(response, reply_markup=get_main_keyboard())
+        except Exception as e:
+            logger.error(
+                f"Failed to send multi-day assignment confirmation to user {message.from_user.id}",
+                exc_info=True,
+            )
 
         # Show updated calendar
         await send_calendar(message, year, month)
@@ -583,7 +604,21 @@ async def handle_assign_bulk(message: Message, cmd: NLCommand):
             f"📊 Кількість днів: {assigned_count}"
         )
 
-        await message.answer(response, reply_markup=get_main_keyboard())
+        logger.info(
+            f"Bulk assignment by admin {message.from_user.id}",
+            month=f"{year}-{month:02d}",
+            pattern=cmd.pattern,
+            people=names,
+            count=assigned_count,
+        )
+
+        try:
+            await message.answer(response, reply_markup=get_main_keyboard())
+        except Exception as e:
+            logger.error(
+                f"Failed to send bulk assignment confirmation to user {message.from_user.id}",
+                exc_info=True,
+            )
 
         # Show updated calendar
         await send_calendar(message, year, month)
@@ -701,15 +736,32 @@ async def handle_assign_day(message: Message, cmd: NLCommand):
                 response = (
                     f"✅ Призначено на {assign_date.strftime('%d.%m.%Y')}: {names_text}"
                 )
+                logger.info(
+                    f"Assignment created by admin {message.from_user.id}",
+                    date=assign_date.isoformat(),
+                    people=names,
+                )
             else:
                 response = (
                     f"✅ Видалено призначення на {assign_date.strftime('%d.%m.%Y')}"
+                )
+                logger.info(
+                    f"Assignment cleared by admin {message.from_user.id}",
+                    date=assign_date.isoformat(),
                 )
 
             change_desc = notification.get_change_description()
             response += f"\n📝 {change_desc}"
 
-            await message.answer(response, reply_markup=get_main_keyboard())
+            try:
+                await message.answer(response, reply_markup=get_main_keyboard())
+            except Exception as e:
+                logger.error(
+                    f"Failed to send assignment confirmation to user {message.from_user.id}",
+                    exc_info=True,
+                )
+                # Still try to send calendar even if text message failed
+
             await send_change_notification(message.bot, notification)
             await send_calendar(message, year, month)
         else:
@@ -880,7 +932,7 @@ async def cmd_set_combo(message: Message, **kwargs):
         "Формат:\n"
         "/setcombo <маска> <емодзі> <назва>\n\n"
         "Приклад:\n"
-        "/setcombo 5 🩷 Діана+Женя\n\n"
+        "/setcombo 5 🟠 Діана+Женя\n\n"
         "Маска: число (сума позицій: 1+4=5)\n"
         "Емодзі: будь-який емодзі\n"
         "Назва: текст для легенди"
@@ -1006,6 +1058,567 @@ async def cmd_edit_user(message: Message, **kwargs):
     except Exception as e:
         logger.error(f"Error in cmd_edit_user: {e}", exc_info=True)
         await message.answer("❌ Сталася помилка при редагуванні користувача.")
+
+
+@router.message(Command("editusers"))
+async def cmd_edit_users_interactive(message: Message, **kwargs):
+    """Edit users interactively with buttons (admin only)."""
+    try:
+        if not message.from_user:
+            return
+
+        if not is_admin(message.from_user.id):
+            await message.answer("🔒 Команда доступна лише адміністраторам.")
+            return
+
+        logger.info(f"Admin {message.from_user.id} starting interactive user edit")
+
+        # Get all users
+        users = user_manager.get_active_users()
+        all_users = repo.get_all_users(active_only=False)
+
+        if not all_users:
+            await message.answer("❌ Користувачів не знайдено.")
+            return
+
+        text = "👥 Оберіть користувача для редагування:\n\n"
+        for user in all_users:
+            status = "✅" if user.is_active else "❌"
+            text += (
+                f"{status} {user.emoji} {user.name_uk} (позиція {user.bit_position})\n"
+            )
+
+        # Create buttons for each user
+        buttons = []
+        for user in sorted(all_users, key=lambda u: u.bit_position):
+            status_icon = "✅" if user.is_active else "❌"
+            button_text = f"{status_icon} {user.emoji} {user.name_uk}"
+            buttons.append(
+                [
+                    InlineKeyboardButton(
+                        text=button_text,
+                        callback_data=f"edituser_select_{user.bit_position}",
+                    )
+                ]
+            )
+
+        # Add "Add new user" button
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    text="➕ Додати нового користувача",
+                    callback_data="edituser_add_new",
+                )
+            ]
+        )
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await message.answer(text, reply_markup=keyboard)
+
+    except Exception as e:
+        logger.error(f"Error in cmd_edit_users_interactive: {e}", exc_info=True)
+        await message.answer("❌ Сталася помилка при відображенні користувачів.")
+
+
+@router.callback_query(F.data.startswith("edituser_select_"))
+async def callback_edituser_select(callback: CallbackQuery, **kwargs):
+    """Handle user selection for editing."""
+    try:
+        if not callback.from_user or not callback.data:
+            return
+
+        user_id = callback.from_user.id
+
+        if not is_admin(user_id):
+            await callback.answer("🔒 Доступ заборонено")
+            return
+
+        # Parse: edituser_select_POSITION
+        bit_position = int(callback.data.replace("edituser_select_", ""))
+        user = repo.get_user_by_bit(bit_position)
+
+        if not user:
+            await callback.answer("❌ Користувача не знайдено")
+            return
+
+        # Store in session
+        user_edit_sessions[user_id] = {
+            "user": user,
+            "bit_position": user.bit_position,
+            "name_uk": user.name_uk,
+            "name_en": user.name_en,
+            "emoji": user.emoji,
+            "is_active": user.is_active,
+        }
+
+        # Show edit menu
+        await send_user_edit_menu(callback, user)
+        await callback.answer()
+
+    except Exception as e:
+        logger.error(f"Error in callback_edituser_select: {e}", exc_info=True)
+        await callback.answer("❌ Помилка")
+
+
+async def send_user_edit_menu(callback: CallbackQuery, user: UserConfig):
+    """Send edit menu for a user."""
+    status = "✅ Активний" if user.is_active else "❌ Неактивний"
+
+    text = (
+        f"✏️ Редагування користувача:\n\n"
+        f"📍 Позиція: {user.bit_position}\n"
+        f"🇺🇦 Ім'я (укр): {user.name_uk}\n"
+        f"🇬🇧 Ім'я (англ): {user.name_en}\n"
+        f"{user.emoji} Емодзі\n"
+        f"📊 Статус: {status}\n\n"
+        f"Що бажаєте змінити?"
+    )
+
+    buttons = [
+        [
+            InlineKeyboardButton(
+                text="🇺🇦 Змінити ім'я (укр)", callback_data=f"edituser_field_name_uk"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="🇬🇧 Змінити ім'я (англ)", callback_data=f"edituser_field_name_en"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text=f"{user.emoji} Змінити емодзі",
+                callback_data=f"edituser_field_emoji",
+            )
+        ],
+    ]
+
+    # Add toggle active/inactive button
+    if user.is_active:
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    text="❌ Деактивувати користувача",
+                    callback_data=f"edituser_toggle_active",
+                )
+            ]
+        )
+    else:
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    text="✅ Активувати користувача",
+                    callback_data=f"edituser_toggle_active",
+                )
+            ]
+        )
+
+    buttons.append(
+        [
+            InlineKeyboardButton(
+                text="🔙 Назад до списку", callback_data="edituser_back_to_list"
+            ),
+            InlineKeyboardButton(text="❌ Скасувати", callback_data="edituser_cancel"),
+        ]
+    )
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    try:
+        await callback.message.edit_text(text, reply_markup=keyboard)
+    except Exception:
+        await callback.message.answer(text, reply_markup=keyboard)
+
+
+@router.callback_query(F.data.startswith("edituser_field_"))
+async def callback_edituser_field(callback: CallbackQuery, **kwargs):
+    """Handle field selection for editing."""
+    try:
+        if not callback.from_user or not callback.data:
+            return
+
+        user_id = callback.from_user.id
+        session = user_edit_sessions.get(user_id)
+
+        if not session:
+            await callback.answer("❌ Сесія закінчилася. Почніть знову з /editusers")
+            return
+
+        # Parse field: edituser_field_FIELDNAME
+        field = callback.data.replace("edituser_field_", "")
+        session["editing_field"] = field
+
+        # Show input prompt
+        field_names = {
+            "name_uk": "українське ім'я",
+            "name_en": "англійське ім'я",
+            "emoji": "емодзі",
+        }
+
+        current_value = session.get(field, "")
+        text = (
+            f"✏️ Введіть нове {field_names.get(field, field)}:\n\n"
+            f"Поточне значення: {current_value}\n\n"
+            f"Надішліть нове значення текстовим повідомленням."
+        )
+
+        buttons = [
+            [
+                InlineKeyboardButton(
+                    text="🔙 Назад", callback_data="edituser_back_to_menu"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ Скасувати", callback_data="edituser_cancel"
+                )
+            ],
+        ]
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+        await callback.message.edit_text(text, reply_markup=keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.error(f"Error in callback_edituser_field: {e}", exc_info=True)
+        await callback.answer("❌ Помилка")
+
+
+@router.callback_query(F.data == "edituser_toggle_active")
+async def callback_edituser_toggle_active(callback: CallbackQuery, **kwargs):
+    """Toggle user active status."""
+    try:
+        if not callback.from_user:
+            return
+
+        user_id = callback.from_user.id
+        session = user_edit_sessions.get(user_id)
+
+        if not session:
+            await callback.answer("❌ Сесія закінчилася")
+            return
+
+        # Toggle status
+        session["is_active"] = not session["is_active"]
+
+        # Update in database
+        updated_user = user_manager.update_user(
+            session["bit_position"],
+            session["name_uk"],
+            session["name_en"],
+            session["emoji"],
+            session["is_active"],
+        )
+
+        status = "активовано" if updated_user.is_active else "деактивовано"
+        await callback.answer(f"✅ Користувача {status}")
+
+        # Update session
+        session["is_active"] = updated_user.is_active
+
+        # Refresh menu
+        await send_user_edit_menu(callback, updated_user)
+
+        logger.info(
+            f"User {updated_user.name_en} toggled to active={updated_user.is_active} by admin {user_id}"
+        )
+
+    except Exception as e:
+        logger.error(f"Error in callback_edituser_toggle_active: {e}", exc_info=True)
+        await callback.answer("❌ Помилка")
+
+
+@router.callback_query(F.data == "edituser_back_to_menu")
+async def callback_edituser_back_to_menu(callback: CallbackQuery, **kwargs):
+    """Go back to edit menu."""
+    try:
+        if not callback.from_user:
+            return
+
+        user_id = callback.from_user.id
+        session = user_edit_sessions.get(user_id)
+
+        if not session:
+            await callback.answer("❌ Сесія закінчилася")
+            return
+
+        # Get current user config
+        user = repo.get_user_by_bit(session["bit_position"])
+        if not user:
+            await callback.answer("❌ Користувача не знайдено")
+            return
+
+        # Clear editing field
+        session.pop("editing_field", None)
+
+        await send_user_edit_menu(callback, user)
+        await callback.answer()
+
+    except Exception as e:
+        logger.error(f"Error in callback_edituser_back_to_menu: {e}", exc_info=True)
+        await callback.answer("❌ Помилка")
+
+
+@router.callback_query(F.data == "edituser_back_to_list")
+async def callback_edituser_back_to_list(callback: CallbackQuery, **kwargs):
+    """Go back to user list."""
+    try:
+        if not callback.from_user:
+            return
+
+        user_id = callback.from_user.id
+
+        # Clear session
+        user_edit_sessions.pop(user_id, None)
+
+        # Show user list again
+        all_users = repo.get_all_users(active_only=False)
+
+        if not all_users:
+            await callback.message.edit_text("❌ Користувачів не знайдено.")
+            await callback.answer()
+            return
+
+        text = "👥 Оберіть користувача для редагування:\n\n"
+        for user in all_users:
+            status = "✅" if user.is_active else "❌"
+            text += (
+                f"{status} {user.emoji} {user.name_uk} (позиція {user.bit_position})\n"
+            )
+
+        buttons = []
+        for user in sorted(all_users, key=lambda u: u.bit_position):
+            status_icon = "✅" if user.is_active else "❌"
+            button_text = f"{status_icon} {user.emoji} {user.name_uk}"
+            buttons.append(
+                [
+                    InlineKeyboardButton(
+                        text=button_text,
+                        callback_data=f"edituser_select_{user.bit_position}",
+                    )
+                ]
+            )
+
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    text="➕ Додати нового користувача",
+                    callback_data="edituser_add_new",
+                )
+            ]
+        )
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await callback.message.edit_text(text, reply_markup=keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.error(f"Error in callback_edituser_back_to_list: {e}", exc_info=True)
+        await callback.answer("❌ Помилка")
+
+
+@router.callback_query(F.data == "edituser_cancel")
+async def callback_edituser_cancel(callback: CallbackQuery, **kwargs):
+    """Cancel user editing."""
+    try:
+        if not callback.from_user:
+            return
+
+        user_id = callback.from_user.id
+        user_edit_sessions.pop(user_id, None)
+
+        await callback.message.edit_text("❌ Редагування скасовано")
+        await callback.answer()
+
+        logger.info(f"User edit cancelled by admin {user_id}")
+
+    except Exception as e:
+        logger.error(f"Error in callback_edituser_cancel: {e}", exc_info=True)
+        await callback.answer("❌ Помилка")
+
+
+@router.callback_query(F.data == "edituser_add_new")
+async def callback_edituser_add_new(callback: CallbackQuery, **kwargs):
+    """Start adding a new user."""
+    try:
+        if not callback.from_user:
+            return
+
+        user_id = callback.from_user.id
+
+        # Find next available position
+        all_users = repo.get_all_users(active_only=False)
+        used_positions = {u.bit_position for u in all_users}
+        next_position = None
+        for pos in range(8):
+            if pos not in used_positions:
+                next_position = pos
+                break
+
+        if next_position is None:
+            await callback.answer("❌ Всі позиції зайняті (максимум 8 користувачів)")
+            return
+
+        # Initialize new user session
+        user_edit_sessions[user_id] = {
+            "is_new": True,
+            "bit_position": next_position,
+            "name_uk": "",
+            "name_en": "",
+            "emoji": "⚫",
+            "is_active": True,
+            "editing_field": "name_uk",
+        }
+
+        text = (
+            f"➕ Додавання нового користувача\n\n"
+            f"📍 Позиція: {next_position}\n\n"
+            f"✏️ Крок 1/3: Введіть українське ім'я\n"
+            f"Наприклад: Діана, Марія, Олександр"
+        )
+
+        buttons = [
+            [InlineKeyboardButton(text="❌ Скасувати", callback_data="edituser_cancel")]
+        ]
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+        await callback.message.edit_text(text, reply_markup=keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.error(f"Error in callback_edituser_add_new: {e}", exc_info=True)
+        await callback.answer("❌ Помилка")
+
+
+@router.message(F.text)
+async def handle_user_edit_input(message: Message, **kwargs):
+    """Handle text input for user editing."""
+    if not message.from_user or not message.text:
+        return
+
+    user_id = message.from_user.id
+    session = user_edit_sessions.get(user_id)
+
+    # Check if this is part of an edit session
+    if not session or "editing_field" not in session:
+        return  # Not in edit mode, let other handlers process
+
+    try:
+        field = session["editing_field"]
+        value = message.text.strip()
+
+        # Validate and store the value
+        if field == "name_uk" and not value:
+            await message.answer(
+                "❌ Українське ім'я не може бути порожнім. Спробуйте ще раз."
+            )
+            return
+
+        if field == "name_en" and not value:
+            await message.answer(
+                "❌ Англійське ім'я не може бути порожнім. Спробуйте ще раз."
+            )
+            return
+
+        if field == "emoji" and len(value) > 5:  # Basic emoji validation
+            await message.answer("❌ Введіть один емодзі. Спробуйте ще раз.")
+            return
+
+        # Store the value
+        session[field] = value
+
+        # Handle new user flow
+        if session.get("is_new"):
+            if field == "name_uk":
+                session["editing_field"] = "name_en"
+                text = (
+                    f"✏️ Крок 2/3: Введіть англійське ім'я\n"
+                    f"(використовується для розпізнавання команд)\n\n"
+                    f"Наприклад: diana, maria, alex\n"
+                    f"(малими літерами, без пробілів)"
+                )
+                buttons = [
+                    [
+                        InlineKeyboardButton(
+                            text="❌ Скасувати", callback_data="edituser_cancel"
+                        )
+                    ]
+                ]
+                keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+                await message.answer(text, reply_markup=keyboard)
+                return
+
+            elif field == "name_en":
+                session["editing_field"] = "emoji"
+                text = (
+                    f"✏️ Крок 3/3: Введіть емодзі\n"
+                    f"(буде відображатися в календарі)\n\n"
+                    f"Наприклад: 🔵 🟣 🟢 💗 💙 💚 🧡"
+                )
+                buttons = [
+                    [
+                        InlineKeyboardButton(
+                            text="❌ Скасувати", callback_data="edituser_cancel"
+                        )
+                    ]
+                ]
+                keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+                await message.answer(text, reply_markup=keyboard)
+                return
+
+            elif field == "emoji":
+                # Create the new user
+                new_user = user_manager.update_user(
+                    session["bit_position"],
+                    session["name_uk"],
+                    session["name_en"].lower(),
+                    session["emoji"],
+                    session["is_active"],
+                )
+
+                await message.answer(
+                    f"✅ Нового користувача додано!\n\n"
+                    f"📍 Позиція: {new_user.bit_position}\n"
+                    f"🇺🇦 Ім'я: {new_user.name_uk}\n"
+                    f"🇬🇧 Name: {new_user.name_en}\n"
+                    f"{new_user.emoji} Емодзі\n"
+                    f"📊 Статус: {'✅ Активний' if new_user.is_active else '❌ Неактивний'}"
+                )
+
+                logger.info(f"New user {new_user.name_en} created by admin {user_id}")
+                user_edit_sessions.pop(user_id, None)
+                return
+
+        # Handle existing user field update
+        else:
+            # Update the user
+            updated_user = user_manager.update_user(
+                session["bit_position"],
+                session["name_uk"],
+                session["name_en"].lower(),
+                session["emoji"],
+                session["is_active"],
+            )
+
+            await message.answer(
+                f"✅ Поле оновлено!\n\n"
+                f"📍 Позиція: {updated_user.bit_position}\n"
+                f"🇺🇦 Ім'я: {updated_user.name_uk}\n"
+                f"🇬🇧 Name: {updated_user.name_en}\n"
+                f"{updated_user.emoji} Емодзі\n"
+                f"📊 Статус: {'✅ Активний' if updated_user.is_active else '❌ Неактивний'}"
+            )
+
+            logger.info(
+                f"User {updated_user.name_en} field {field} updated by admin {user_id}"
+            )
+
+            # Clear session
+            user_edit_sessions.pop(user_id, None)
+
+    except Exception as e:
+        logger.error(f"Error in handle_user_edit_input: {e}", exc_info=True)
+        await message.answer("❌ Сталася помилка при збереженні. Спробуйте ще раз.")
 
 
 @router.message(Command("removeuser"))
@@ -1163,6 +1776,483 @@ async def cmd_activate_user(message: Message, **kwargs):
     except Exception as e:
         logger.error(f"Error in cmd_activate_user: {e}", exc_info=True)
         await message.answer("❌ Сталася помилка при активації користувача.")
+
+
+@router.message(Command("assign"))
+async def cmd_interactive_assign(message: Message, **kwargs):
+    """Start interactive user assignment (admin only)."""
+    try:
+        if not message.from_user:
+            return
+
+        if not is_admin(message.from_user.id):
+            await message.answer("🔒 Команда доступна лише адміністраторам.")
+            return
+
+        logger.info(f"Admin {message.from_user.id} starting interactive assignment")
+
+        # Get current month
+        today = date.today()
+
+        # Initialize session
+        assignment_sessions[message.from_user.id] = {
+            "year": today.year,
+            "month": today.month,
+            "day": None,
+            "selected_users": set(),
+        }
+
+        await send_date_selection_keyboard(message, today.year, today.month)
+
+    except Exception as e:
+        logger.error(f"Error in cmd_interactive_assign: {e}", exc_info=True)
+        await message.answer("❌ Сталася помилка при початку призначення.")
+
+
+async def send_date_selection_keyboard(message: Message, year: int, month: int):
+    """Send calendar-style date selection keyboard."""
+    from calendar import monthrange
+
+    from babel.dates import format_date
+
+    month_name = format_date(
+        date(year, month, 1), "LLLL yyyy", locale="uk"
+    ).capitalize()
+
+    text = f"📅 Оберіть дату для призначення:\n{month_name}"
+
+    # Get days in month
+    _, last_day = monthrange(year, month)
+
+    # Create keyboard with days (7 columns for week layout)
+    buttons = []
+    row = []
+
+    # Add day of week headers
+    weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
+    header_row = [
+        InlineKeyboardButton(text=day, callback_data="day_header") for day in weekdays
+    ]
+    buttons.append(header_row)
+
+    # Add empty buttons for alignment (start from correct weekday)
+    first_weekday = date(year, month, 1).weekday()  # 0=Monday
+    for _ in range(first_weekday):
+        row.append(InlineKeyboardButton(text=" ", callback_data="day_empty"))
+
+    # Add day buttons
+    for day in range(1, last_day + 1):
+        day_date = date(year, month, day)
+
+        # Check if there's an assignment
+        assignment = repo.get_by_day(day_date)
+        emoji = ""
+        if assignment and assignment.mask > 0:
+            emoji = user_manager.get_emoji_for_mask(assignment.mask)
+
+        button_text = f"{day}{emoji}" if emoji else str(day)
+        row.append(
+            InlineKeyboardButton(
+                text=button_text, callback_data=f"assign_date_{year}_{month}_{day}"
+            )
+        )
+
+        # New row after Sunday
+        if (first_weekday + day) % 7 == 0:
+            buttons.append(row)
+            row = []
+
+    # Add remaining buttons if any
+    if row:
+        # Fill remaining cells
+        while len(row) < 7:
+            row.append(InlineKeyboardButton(text=" ", callback_data="day_empty"))
+        buttons.append(row)
+
+    # Add navigation row
+    nav_row = []
+    prev_month_date = date(year, month, 1) - relativedelta(months=1)
+    next_month_date = date(year, month, 1) + relativedelta(months=1)
+
+    nav_row.append(
+        InlineKeyboardButton(
+            text="◀️ Попередній",
+            callback_data=f"assign_month_{prev_month_date.year}_{prev_month_date.month}",
+        )
+    )
+    nav_row.append(
+        InlineKeyboardButton(text="❌ Скасувати", callback_data="assign_cancel")
+    )
+    nav_row.append(
+        InlineKeyboardButton(
+            text="Наступний ▶️",
+            callback_data=f"assign_month_{next_month_date.year}_{next_month_date.month}",
+        )
+    )
+    buttons.append(nav_row)
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await message.answer(text, reply_markup=keyboard)
+
+
+async def send_user_selection_keyboard(
+    callback: CallbackQuery, year: int, month: int, day: int
+):
+    """Send user selection keyboard with toggle buttons."""
+    user_id = callback.from_user.id if callback.from_user else 0
+    session = assignment_sessions.get(user_id)
+
+    if not session:
+        await callback.answer("❌ Сесія закінчилася. Почніть знову з /assign")
+        return
+
+    selected_users = session.get("selected_users", set())
+    assign_date = date(year, month, day)
+
+    # Get current assignment
+    current_assignment = repo.get_by_day(assign_date)
+    current_names = []
+    if current_assignment and current_assignment.mask > 0:
+        current_names = current_assignment.get_people_names()
+
+    # Get active users
+    active_users = user_manager.get_active_users()
+
+    text = (
+        f"👥 Оберіть працівників для {assign_date.strftime('%d.%m.%Y')}:\n\n"
+        f"Поточне призначення: {', '.join(current_names) if current_names else '—'}\n\n"
+        f"Натисніть на ім'я, щоб додати/прибрати:"
+    )
+
+    # Create buttons for each user
+    buttons = []
+    for user in sorted(active_users, key=lambda u: u.bit_position):
+        is_selected = user.name_en.lower() in selected_users
+        button_text = f"{'✅' if is_selected else '⬜'} {user.emoji} {user.name_uk}"
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    text=button_text,
+                    callback_data=f"assign_toggle_{user.name_en.lower()}",
+                )
+            ]
+        )
+
+    # Add action buttons
+    action_row = [
+        InlineKeyboardButton(text="🔙 Назад", callback_data="assign_back_to_date"),
+        InlineKeyboardButton(
+            text="✅ Зберегти", callback_data=f"assign_save_{year}_{month}_{day}"
+        ),
+        InlineKeyboardButton(
+            text="🗑️ Очистити", callback_data=f"assign_clear_{year}_{month}_{day}"
+        ),
+    ]
+    buttons.append(action_row)
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    try:
+        await callback.message.edit_text(text, reply_markup=keyboard)
+    except Exception:
+        # If edit fails, send new message
+        await callback.message.answer(text, reply_markup=keyboard)
+
+
+@router.callback_query(F.data.startswith("assign_month_"))
+async def callback_assign_month(callback: CallbackQuery, **kwargs):
+    """Handle month navigation in assignment mode."""
+    try:
+        if not callback.from_user or not callback.data:
+            return
+
+        user_id = callback.from_user.id
+
+        if user_id not in assignment_sessions:
+            await callback.answer("❌ Сесія закінчилася. Почніть знову з /assign")
+            return
+
+        # Parse month: assign_month_YYYY_MM
+        parts = callback.data.split("_")
+        year = int(parts[2])
+        month = int(parts[3])
+
+        # Update session
+        assignment_sessions[user_id]["year"] = year
+        assignment_sessions[user_id]["month"] = month
+
+        # Send new calendar
+        await callback.message.delete()
+        if callback.message:
+            await send_date_selection_keyboard(callback.message, year, month)
+
+        await callback.answer()
+
+    except Exception as e:
+        logger.error(f"Error in callback_assign_month: {e}", exc_info=True)
+        await callback.answer("❌ Помилка")
+
+
+@router.callback_query(F.data.startswith("assign_date_"))
+async def callback_assign_date(callback: CallbackQuery, **kwargs):
+    """Handle date selection in assignment mode."""
+    try:
+        if not callback.from_user or not callback.data:
+            return
+
+        user_id = callback.from_user.id
+
+        if user_id not in assignment_sessions:
+            await callback.answer("❌ Сесія закінчилася. Почніть знову з /assign")
+            return
+
+        # Parse date: assign_date_YYYY_MM_DD
+        parts = callback.data.split("_")
+        year = int(parts[2])
+        month = int(parts[3])
+        day = int(parts[4])
+
+        # Update session
+        assignment_sessions[user_id]["day"] = day
+        assignment_sessions[user_id]["year"] = year
+        assignment_sessions[user_id]["month"] = month
+        assignment_sessions[user_id]["selected_users"] = set()
+
+        # Show user selection
+        await send_user_selection_keyboard(callback, year, month, day)
+        await callback.answer()
+
+    except Exception as e:
+        logger.error(f"Error in callback_assign_date: {e}", exc_info=True)
+        await callback.answer("❌ Помилка")
+
+
+@router.callback_query(F.data.startswith("assign_toggle_"))
+async def callback_assign_toggle(callback: CallbackQuery, **kwargs):
+    """Handle user toggle in assignment mode."""
+    try:
+        if not callback.from_user or not callback.data:
+            return
+
+        user_id = callback.from_user.id
+        session = assignment_sessions.get(user_id)
+
+        if not session:
+            await callback.answer("❌ Сесія закінчилася. Почніть знову з /assign")
+            return
+
+        # Parse user: assign_toggle_USERNAME
+        user_name = callback.data.replace("assign_toggle_", "")
+
+        selected_users = session["selected_users"]
+
+        # Toggle user selection
+        if user_name in selected_users:
+            selected_users.remove(user_name)
+        else:
+            selected_users.add(user_name)
+
+        # Refresh keyboard
+        year = session["year"]
+        month = session["month"]
+        day = session["day"]
+
+        await send_user_selection_keyboard(callback, year, month, day)
+        await callback.answer()
+
+    except Exception as e:
+        logger.error(f"Error in callback_assign_toggle: {e}", exc_info=True)
+        await callback.answer("❌ Помилка")
+
+
+@router.callback_query(F.data.startswith("assign_save_"))
+async def callback_assign_save(callback: CallbackQuery, **kwargs):
+    """Save the assignment."""
+    try:
+        if not callback.from_user or not callback.data:
+            return
+
+        user_id = callback.from_user.id
+        session = assignment_sessions.get(user_id)
+
+        if not session:
+            await callback.answer("❌ Сесія закінчилася")
+            return
+
+        # Parse date: assign_save_YYYY_MM_DD
+        parts = callback.data.split("_")
+        year = int(parts[2])
+        month = int(parts[3])
+        day = int(parts[4])
+
+        assign_date = date(year, month, day)
+        selected_users = session["selected_users"]
+
+        # Convert selected users to proper names
+        people_names = []
+        for user_name in selected_users:
+            user = user_manager.get_user_by_name(user_name)
+            if user:
+                people_names.append(user.name_en.capitalize())
+
+        # Create assignment
+        assignment = Assignment.from_people(
+            day=assign_date, people=people_names, note=""
+        )
+        saved_assignment, notification = repo.upsert_with_notification(
+            assignment, user_id
+        )
+
+        # Send response
+        if saved_assignment.mask > 0:
+            names = saved_assignment.get_people_names()
+            response = f"✅ Призначено на {assign_date.strftime('%d.%m.%Y')}: {', '.join(names)}"
+            logger.info(
+                f"Interactive assignment saved by admin {user_id}",
+                date=assign_date.isoformat(),
+                people=names,
+            )
+        else:
+            response = f"✅ Видалено призначення на {assign_date.strftime('%d.%m.%Y')}"
+            logger.info(
+                f"Interactive assignment cleared by admin {user_id}",
+                date=assign_date.isoformat(),
+            )
+
+        try:
+            await callback.message.edit_text(response)
+            await callback.answer("✅ Збережено")
+        except Exception as e:
+            logger.error(
+                f"Failed to send interactive assignment confirmation to user {user_id}",
+                exc_info=True,
+            )
+            # Try answer even if edit failed
+            try:
+                await callback.answer(
+                    "✅ Збережено, але не вдалося оновити повідомлення"
+                )
+            except:
+                pass
+
+        # Send notification and calendar
+        if callback.message and callback.message.bot:
+            await send_change_notification(callback.message.bot, notification)
+            await send_calendar(callback.message, year, month)
+
+        # Clear session
+        assignment_sessions.pop(user_id, None)
+
+    except Exception as e:
+        logger.error(f"Error in callback_assign_save: {e}", exc_info=True)
+        await callback.answer("❌ Помилка збереження")
+
+
+@router.callback_query(F.data.startswith("assign_clear_"))
+async def callback_assign_clear(callback: CallbackQuery, **kwargs):
+    """Clear the assignment for selected date."""
+    try:
+        if not callback.from_user or not callback.data:
+            return
+
+        user_id = callback.from_user.id
+
+        if user_id not in assignment_sessions:
+            await callback.answer("❌ Сесія закінчилася")
+            return
+
+        # Parse date: assign_clear_YYYY_MM_DD
+        parts = callback.data.split("_")
+        year = int(parts[2])
+        month = int(parts[3])
+        day = int(parts[4])
+
+        assign_date = date(year, month, day)
+
+        # Create empty assignment
+        assignment = Assignment.from_people(day=assign_date, people=[], note="")
+        saved_assignment, notification = repo.upsert_with_notification(
+            assignment, user_id
+        )
+
+        response = f"✅ Очищено призначення на {assign_date.strftime('%d.%m.%Y')}"
+
+        await callback.message.edit_text(response)
+        await callback.answer("✅ Очищено")
+
+        # Send notification and calendar
+        if callback.message and callback.message.bot:
+            await send_change_notification(callback.message.bot, notification)
+            await send_calendar(callback.message, year, month)
+
+        # Clear session
+        assignment_sessions.pop(user_id, None)
+
+        logger.info(f"Assignment cleared by admin {user_id} for {assign_date}")
+
+    except Exception as e:
+        logger.error(f"Error in callback_assign_clear: {e}", exc_info=True)
+        await callback.answer("❌ Помилка очищення")
+
+
+@router.callback_query(F.data == "assign_back_to_date")
+async def callback_assign_back(callback: CallbackQuery, **kwargs):
+    """Go back to date selection."""
+    try:
+        if not callback.from_user:
+            return
+
+        user_id = callback.from_user.id
+        session = assignment_sessions.get(user_id)
+
+        if not session:
+            await callback.answer("❌ Сесія закінчилася")
+            return
+
+        year = session["year"]
+        month = session["month"]
+
+        # Clear day selection
+        session["day"] = None
+        session["selected_users"] = set()
+
+        await callback.message.delete()
+        if callback.message:
+            await send_date_selection_keyboard(callback.message, year, month)
+
+        await callback.answer()
+
+    except Exception as e:
+        logger.error(f"Error in callback_assign_back: {e}", exc_info=True)
+        await callback.answer("❌ Помилка")
+
+
+@router.callback_query(F.data == "assign_cancel")
+async def callback_assign_cancel(callback: CallbackQuery, **kwargs):
+    """Cancel assignment session."""
+    try:
+        if not callback.from_user:
+            return
+
+        user_id = callback.from_user.id
+
+        # Clear session
+        assignment_sessions.pop(user_id, None)
+
+        await callback.message.edit_text("❌ Призначення скасовано")
+        await callback.answer()
+
+        logger.info(f"Assignment cancelled by admin {user_id}")
+
+    except Exception as e:
+        logger.error(f"Error in callback_assign_cancel: {e}", exc_info=True)
+        await callback.answer("❌ Помилка")
+
+
+@router.callback_query(F.data.in_(["day_header", "day_empty"]))
+async def callback_day_ignore(callback: CallbackQuery, **kwargs):
+    """Ignore header and empty day clicks."""
+    await callback.answer()
 
 
 @router.message(Command("changes"))
@@ -1756,9 +2846,17 @@ async def set_bot_commands(bot: Bot):
         admin_commands = [
             BotCommand(command="start", description="🏠 Початок роботи з ботом"),
             BotCommand(command="help", description="❓ Показати довідку"),
+            BotCommand(
+                command="assign", description="📝 Призначити працівників (кнопки)"
+            ),
             BotCommand(command="users", description="👥 Список користувачів"),
+            BotCommand(
+                command="editusers", description="✏️ Редагувати користувачів (кнопки)"
+            ),
             BotCommand(command="adduser", description="➕ Додати/оновити користувача"),
-            BotCommand(command="edituser", description="✏️ Редагувати користувача"),
+            BotCommand(
+                command="edituser", description="✏️ Редагувати користувача (текст)"
+            ),
             BotCommand(command="removeuser", description="🗑️ Деактивувати користувача"),
             BotCommand(command="activateuser", description="✅ Активувати користувача"),
             BotCommand(
