@@ -3,6 +3,7 @@
 import os
 import json
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Optional, Dict, Any, List
 from google.genai import Client
 from google.genai import types as genai_types
@@ -668,7 +669,21 @@ Only return actions with confidence > 0.7.
             ]
         )
 
+        # Get current datetime for context (Kyiv timezone)
+        kyiv_tz = ZoneInfo("Europe/Kyiv")
+        current_datetime = datetime.now(kyiv_tz)
+        current_date_str = current_datetime.strftime("%Y-%m-%d %H:%M:%S %Z")
+        current_year = current_datetime.year
+        current_month = current_datetime.month
+        current_day = current_datetime.day
+
         prompt = f"""You are analyzing a calendar image for shift scheduling. Extract all shift assignments from this calendar.
+
+CURRENT DATE/TIME CONTEXT:
+- Current date and time: {current_date_str}
+- Current year: {current_year}
+- Current month: {current_month} (day {current_day})
+- Use this context to help interpret the calendar, but ALWAYS use the EXACT month and year shown in the calendar image itself.
 
 Available users and their colors:
 {users_context}
@@ -852,7 +867,6 @@ Important:
                     date_str = assignment.get("date", "")
                     if date_str:
                         try:
-                            from datetime import datetime
                             parsed_date = datetime.strptime(date_str, "%Y-%m-%d")
                             if parsed_date.year != year or parsed_date.month != month:
                                 print(f"⚠️ [GEMINI]   Assignment date {date_str} doesn't match calendar month/year ({year}-{month:02d})")

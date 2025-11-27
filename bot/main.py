@@ -41,6 +41,7 @@ async def setup_bot_commands(bot: Bot):
         ),
         BotCommand(command="hideuser", description="Приховати користувача"),
         BotCommand(command="showuser", description="Показати прихованого користувача"),
+        BotCommand(command="clearmonth", description="Очистити всі зміни за місяць"),
     ]
 
     # Set commands (admin commands are visible but protected by middleware)

@@ -14,7 +14,8 @@ from bot.services.calendar import (
     build_calendar_keyboard, 
     get_calendar_text,
     generate_calendar_image,
-    build_calendar_image_keyboard
+    build_calendar_image_keyboard,
+    get_month_name_ukrainian
 )
 from bot.utils.colors import parse_color, assign_color_to_user, get_color_emoji
 from bot.middleware.permissions import is_admin, ADMIN_IDS
@@ -490,6 +491,69 @@ async def cmd_edituser(message: Message):
             await message.answer("❌ Не вдалося розпізнати команду редагування користувача.")
 
 
+@router.message(Command("clearmonth"))
+async def cmd_clearmonth(message: Message):
+    """Handle /clearmonth command (admin only) - clear all shifts for a month"""
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ Тільки адміністратори можуть використовувати цю команду.")
+        return
+    
+    args = message.text.split()[1:] if message.text else []
+    
+    # Parse year and month from arguments or use current month
+    today = date.today()
+    if len(args) >= 2:
+        try:
+            year = int(args[0])
+            month = int(args[1])
+            if month < 1 or month > 12:
+                raise ValueError
+        except ValueError:
+            await message.answer("❌ Невірний формат. Використовуйте: /clearmonth [рік] [місяць]")
+            return
+    else:
+        year = today.year
+        month = today.month
+    
+    # Get month name in Ukrainian
+    month_name = get_month_name_ukrainian(month)
+    
+    # Get count of shifts in the month
+    from bot.database.operations import get_shifts_in_range
+    from calendar import monthrange
+    
+    async with async_session_maker() as session:
+        first_day = date(year, month, 1)
+        last_day_num = monthrange(year, month)[1]
+        last_day = date(year, month, last_day_num)
+        shifts = await get_shifts_in_range(session, first_day, last_day)
+        shift_count = len(shifts)
+    
+    # Create confirmation keyboard
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+    from aiogram.types import InlineKeyboardButton
+    
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="✅ Підтвердити",
+        callback_data=f"confirm_clear_month_{year}_{month}"
+    )
+    builder.button(
+        text="❌ Скасувати",
+        callback_data=f"cancel_clear_month_{year}_{month}"
+    )
+    builder.adjust(2)
+    
+    text = (
+        f"⚠️ <b>Підтвердження очищення місяця</b>\n\n"
+        f"Ви впевнені, що хочете очистити всі зміни для <b>{month_name} {year}</b>?\n\n"
+        f"📊 Знайдено змін: <b>{shift_count}</b>\n\n"
+        f"❌ <b>Ця дія незворотна!</b> Всі призначення на цей місяць будуть видалені."
+    )
+    
+    await message.answer(text, reply_markup=builder.as_markup(), parse_mode="HTML")
+
+
 @router.message(Command("help"))
 async def cmd_help(message: Message):
     """Handle /help command - show all available commands"""
@@ -520,7 +584,8 @@ async def cmd_help(message: Message):
         text += "• <code>/setname &lt;user_id&gt; &lt;ім'я&gt;</code> - Змінити ім'я користувача\n"
         text += "• <code>/listusers</code> або <code>/users</code> - Список всіх користувачів\n"
         text += "• <code>/hideuser &lt;user_id&gt;</code> - Приховати користувача\n"
-        text += "• <code>/showuser &lt;user_id&gt;</code> - Показати прихованого користувача\n\n"
+        text += "• <code>/showuser &lt;user_id&gt;</code> - Показати прихованого користувача\n"
+        text += "• <code>/clearmonth [рік] [місяць]</code> - Очистити всі зміни за місяць\n\n"
         text += "📸 <b>Імпорт календаря:</b>\n"
         text += "• Надішліть зображення календаря - автоматично імпортує призначення\n\n"
         text += "💬 <b>Масові зміни (натуральна мова):</b>\n"

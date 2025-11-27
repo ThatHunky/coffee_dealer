@@ -356,7 +356,7 @@ async def build_calendar_keyboard(
 
 
 async def build_day_user_selection_keyboard(
-    year: int, month: int, day: int
+    year: int, month: int, day: int, undo_action_id: Optional[str] = None
 ) -> InlineKeyboardMarkup:
     """
     Build keyboard for selecting users for a specific day.
@@ -365,6 +365,7 @@ async def build_day_user_selection_keyboard(
         year: Year
         month: Month
         day: Day
+        undo_action_id: Optional undo action ID to add undo button
 
     Returns:
         InlineKeyboardMarkup with user selection
@@ -392,6 +393,12 @@ async def build_day_user_selection_keyboard(
     builder.button(
         text="🗑️ Очистити", callback_data=f"clear_day_{year}_{month:02d}_{day:02d}"
     )
+
+    # Add undo button if undo_action_id is provided
+    if undo_action_id:
+        builder.button(
+            text="↩️ Скасувати", callback_data=f"undo_{undo_action_id}"
+        )
 
     # Add "Back" button (returns to image view)
     builder.button(

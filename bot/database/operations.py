@@ -189,6 +189,42 @@ async def cleanup_old_shifts(session: AsyncSession, max_age_years: int = 1) -> i
     return 0
 
 
+async def delete_shifts_for_month(session: AsyncSession, year: int, month: int) -> List[Shift]:
+    """
+    Delete all shifts for a specific month.
+
+    Args:
+        session: Database session
+        year: Year
+        month: Month (1-12)
+
+    Returns:
+        List of deleted shifts (for undo purposes)
+    """
+    from calendar import monthrange
+    
+    # Get first and last day of month
+    first_day = date(year, month, 1)
+    last_day_num = monthrange(year, month)[1]
+    last_day = date(year, month, last_day_num)
+    
+    # Find all shifts in the month
+    result = await session.execute(
+        select(Shift).where(Shift.date >= first_day, Shift.date <= last_day)
+    )
+    shifts = result.scalars().all()
+    
+    if shifts:
+        # Store shifts for undo before deleting
+        shifts_list = list(shifts)
+        for shift in shifts_list:
+            await session.delete(shift)
+        await session.commit()
+        return shifts_list
+    
+    return []
+
+
 # Request operations
 async def create_request(
     session: AsyncSession,

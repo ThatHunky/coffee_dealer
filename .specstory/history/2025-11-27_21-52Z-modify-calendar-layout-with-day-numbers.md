@@ -4051,6 +4051,632 @@ _**Agent (model default, mode Agent)**_
 ---
 
 
+Checking the current logging and calendar setup, then adding automatic log cleanup and a function to keep only 1 year of calendar history:
+
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /home/thathunky/coffee_dealer/bot/utils/logging_config.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="codebase_search">
+<details>
+                <summary>Tool use: **codebase_search** • Searched codebase "How are shifts stored and retrieved from the database?" • **15** results</summary>
+            
+| File | Lines |
+|------|-------|
+| `bot/database/models.py` | L18-51 |
+| `bot/database/operations.py` | L119-153 |
+| `bot/database/operations.py` | L112-141 |
+| `bot/database/operations.py` | L125-163 |
+| `.specstory/history/2025-11-27_18-42Z-developing-a-telegram-bot-for-job-tracking.md` | L686-724 |
+| `bot/database/models.py` | L32-56 |
+| `.specstory/history/2025-11-27_18-42Z-developing-a-telegram-bot-for-job-tracking.md` | L857-918 |
+| `bot/database/operations.py` | L144-183 |
+| `bot/database/models.py` | L42-73 |
+| `bot/database/operations.py` | L35 |
+| `.specstory/history/2025-11-27_18-42Z-developing-a-telegram-bot-for-job-tracking.md` | L916-983 |
+| `bot/database/models.py` | L29 |
+| `bot/handlers/messages.py` | L254-417 |
+| `bot/handlers/messages.py` | L417-582 |
+| `bot/handlers/callbacks.py` | L158-231 |
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /home/thathunky/coffee_dealer/bot/database/operations.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+
+
+---
+
+
+Adding automatic log cleanup and a function to keep only 1 year of calendar history:
+
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **code_edit** • Edit file: /home/thathunky/coffee_dealer/bot/utils/logging_config.py</summary>
+
+**Chunk 1**
+Lines added: 3, lines removed: 1
+
+```diff
+@@ -3,6 +3,8 @@
+  import logging
+  import os
++ import glob
++ import time
+  from logging.handlers import RotatingFileHandler
+- from datetime import datetime
++ from datetime import datetime, timedelta
+  
+  
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **code_edit** • Edit file: /home/thathunky/coffee_dealer/bot/utils/logging_config.py</summary>
+
+**Chunk 1**
+Lines added: 4, lines removed: 1
+
+```diff
+@@ -89,5 +89,8 @@
+      logger.info(f&quot;   - Image import log: {image_log_file}&quot;)
+      logger.info(f&quot;   - Error log: {error_log_file}&quot;)
+- 
++     
++     # Clean up old log files
++     cleanup_old_logs(log_dir, logger)
++ 
+  
+  def get_logger(name: str) -&gt; logging.Logger:
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **code_edit** • Edit file: /home/thathunky/coffee_dealer/bot/utils/logging_config.py</summary>
+
+**Chunk 1**
+Lines added: 44, lines removed: undefined
+
+```diff
+@@ -106,4 +106,48 @@
+      return logging.getLogger(name)
+  
++ 
++ def cleanup_old_logs(log_dir: str, logger: logging.Logger, max_age_days: int = 30):
++     &quot;&quot;&quot;
++     Clean up log files older than specified days.
++     
++     Args:
++         log_dir: Directory containing log files
++         logger: Logger instance for logging cleanup actions
++         max_age_days: Maximum age in days for log files (default: 30)
++     &quot;&quot;&quot;
++     if not os.path.exists(log_dir):
++         return
++     
++     try:
++         cutoff_time = time.time() - (max_age_days * 24 * 60 * 60)
++         deleted_count = 0
++         deleted_size = 0
++         
++         # Find all log files in the directory (including rotated backups)
++         log_patterns = [
++             os.path.join(log_dir, &quot;*.log&quot;),
++             os.path.join(log_dir, &quot;*.log.*&quot;),  # Rotated backups
++         ]
++         
++         for pattern in log_patterns:
++             for log_file in glob.glob(pattern):
++                 try:
++                     file_stat = os.stat(log_file)
++                     # Check file modification time
++                     if file_stat.st_mtime &lt; cutoff_time:
++                         file_size = file_stat.st_size
++                         os.remove(log_file)
++                         deleted_count += 1
++                         deleted_size += file_size
++                         logger.debug(f&quot;Deleted old log file: {log_file} (age: {(time.time() - file_stat.st_mtime) / (24*60*60):.1f} days)&quot;)
++                 except OSError as e:
++                     logger.warning(f&quot;Could not delete old log file {log_file}: {e}&quot;)
++         
++         if deleted_count &gt; 0:
++             size_mb = deleted_size / (1024 * 1024)
++             logger.info(f&quot;🧹 Cleaned up {deleted_count} old log file(s), freed {size_mb:.2f} MB&quot;)
++     except Exception as e:
++         logger.error(f&quot;Error cleaning up old logs: {e}&quot;, exc_info=True)
++ 
+  
+  class PrintToLogger:
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **code_edit** • Edit file: /home/thathunky/coffee_dealer/bot/database/operations.py</summary>
+
+**Chunk 1**
+Lines added: 31, lines removed: undefined
+
+```diff
+@@ -164,4 +164,35 @@
+      return False
+  
++ 
++ async def cleanup_old_shifts(session: AsyncSession, max_age_years: int = 1) -&gt; int:
++     &quot;&quot;&quot;
++     Delete shifts older than specified years.
++     
++     Args:
++         session: Database session
++         max_age_years: Maximum age in years (default: 1)
++     
++     Returns:
++         Number of shifts deleted
++     &quot;&quot;&quot;
++     from datetime import timedelta
++     
++     cutoff_date = date.today() - timedelta(days=max_age_years * 365)
++     
++     # Find all shifts older than cutoff date
++     result = await session.execute(
++         select(Shift).where(Shift.date &lt; cutoff_date)
++     )
++     old_shifts = result.scalars().all()
++     
++     if old_shifts:
++         count = len(old_shifts)
++         for shift in old_shifts:
++             await session.delete(shift)
++         await session.commit()
++         return count
++     
++     return 0
++ 
+  
+  # Request operations
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /home/thathunky/coffee_dealer/bot/main.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **code_edit** • Edit file: /home/thathunky/coffee_dealer/bot/main.py</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: undefined
+
+```diff
+@@ -11,4 +11,5 @@
+  
+  from bot.database.models import init_db
++ from bot.database.operations import cleanup_old_shifts, async_session_maker
+  from bot.middleware.permissions import PermissionMiddleware, is_admin
+  from bot.handlers import commands, callbacks, messages
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **code_edit** • Edit file: /home/thathunky/coffee_dealer/bot/main.py</summary>
+
+**Chunk 1**
+Lines added: 9, lines removed: undefined
+
+```diff
+@@ -64,4 +64,13 @@
+          await init_db()
+          logger.info(&quot;✅ Database initialized&quot;)
++         
++         # Clean up old calendar shifts (keep max 1 year)
++         logger.info(&quot;🧹 Cleaning up old calendar shifts (keeping last 1 year)...&quot;)
++         async with async_session_maker() as session:
++             deleted_count = await cleanup_old_shifts(session, max_age_years=1)
++             if deleted_count &gt; 0:
++                 logger.info(f&quot;✅ Deleted {deleted_count} old shift(s) older than 1 year&quot;)
++             else:
++                 logger.debug(&quot;No old shifts to clean up&quot;)
+      except Exception as e:
+          logger.error(f&quot;❌ Database initialization error: {e}&quot;)
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /home/thathunky/coffee_dealer/bot/database/operations.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="generic" data-tool-name="read_lints">
+<details>
+          <summary>Tool use: **read_lints** • Read lints for 3 files</summary>
+      
+Lint paths:
+
+- `/home/thathunky/coffee_dealer/bot/utils/logging_config.py`
+- `/home/thathunky/coffee_dealer/bot/database/operations.py`
+- `/home/thathunky/coffee_dealer/bot/main.py`
+
+Lint results
+
+
+**No lint errors found**
+</details>
+</tool-use>
+
+---
+
+
+
+---
+
+
+Verifying the cleanup function imports correctly:
+
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /home/thathunky/coffee_dealer/bot/database/operations.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "from.*Shift|import.*Shift" in "/home/thathunky/coffee_dealer/bot/database/operations.py" • 1 match</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `/home/thathunky/coffee_dealer/bot/database/operations.py` | `from .models import User, Shift, Request, async_session_maker` | L9 |
+
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /home/thathunky/coffee_dealer/bot/database/operations.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+
+
+---
+
+
+Checking imports and verifying everything is correct:
+
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /home/thathunky/coffee_dealer/bot/database/operations.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **code_edit** • Edit file: /home/thathunky/coffee_dealer/bot/database/operations.py</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -1,5 +1,5 @@
+  &quot;&quot;&quot;Database CRUD operations&quot;&quot;&quot;
+  
+- from datetime import date, datetime
++ from datetime import date, datetime, timedelta
+  from typing import Optional, List
+  from sqlalchemy.ext.asyncio import AsyncSession
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **code_edit** • Edit file: /home/thathunky/coffee_dealer/bot/database/operations.py</summary>
+
+**Chunk 1**
+Lines added: undefined, lines removed: 2
+
+```diff
+@@ -176,6 +176,4 @@
+          Number of shifts deleted
+      &quot;&quot;&quot;
+-     from datetime import timedelta
+-     
+      cutoff_date = date.today() - timedelta(days=max_age_years * 365)
+      
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<tool-use data-tool-type="generic" data-tool-name="read_lints">
+<details>
+          <summary>Tool use: **read_lints** • Read lints for 1 file</summary>
+      
+Lint paths:
+
+- `/home/thathunky/coffee_dealer/bot/database/operations.py`
+
+Lint results
+
+Lint errors for `bot/database/operations.py`
+
+
+| Message | Range | Severity |
+|-------|-------|----------|
+| Import "sqlalchemy.ext.asyncio" could not be resolved | 5:6-5:28 | DIAGNOSTIC_SEVERITY_WARNING |
+| Import "sqlalchemy" could not be resolved | 6:6-6:16 | DIAGNOSTIC_SEVERITY_WARNING |
+| Import "update" is not accessed | 6:32-6:38 | DIAGNOSTIC_SEVERITY_HINT |
+| Import "delete" is not accessed | 6:40-6:46 | DIAGNOSTIC_SEVERITY_HINT |
+| Import "sqlalchemy.orm" could not be resolved | 7:6-7:20 | DIAGNOSTIC_SEVERITY_WARNING |
+| Import "selectinload" is not accessed | 7:28-7:40 | DIAGNOSTIC_SEVERITY_HINT |
+| Import "async_session_maker" is not accessed | 9:43-9:62 | DIAGNOSTIC_SEVERITY_HINT |
+| The method "utcnow" in class "datetime" is deprecated<br/>  Use timezone-aware objects to represent datetimes in UTC; e.g. by calling .now(datetime.timezone.utc) | 135:37-135:43 | DIAGNOSTIC_SEVERITY_HINT |
+
+
+</details>
+</tool-use>
+
+---
+
+
+
+---
+
+
+The linter warnings are unresolved import warnings (likely due to the linter environment) and not code errors.
+
+## Summary
+
+Added automatic cleanup for both logs and calendar history:
+
+### 1. **Automatic log cleanup** (`bot/utils/logging_config.py`)
+- Logs older than 30 days are deleted automatically on startup
+- Deletes:
+  - Regular log files (`*.log`)
+  - Rotated backup files (`*.log.1`, `*.log.2`, etc.)
+- Logs cleanup actions, including count and freed space
+- Configurable via `max_age_days` parameter (default: 30 days)
+
+### 2. **Calendar history cleanup** (`bot/database/operations.py` + `bot/main.py`)
+- Added `cleanup_old_shifts()` function that deletes shifts older than 1 year
+- Runs automatically on bot startup
+- Keeps only the last 12 months of calendar history
+- Logs how many old shifts were deleted
+
+### How it works:
+
+**Log Cleanup:**
+- Runs when logging is initialized (on bot startup)
+- Scans the `/logs` directory
+- Deletes any log file (including rotated backups) older than 30 days
+- Reports cleanup actions in the logs
+
+**Calendar Cleanup:**
+- Runs after database initialization on bot startup
+- Deletes all shifts with dates older than 1 year from today
+- Only runs once per startup to avoid excessive database operations
+
+Both cleanup operations are automatic and require no manual intervention. The system maintains:
+- Log files: max 30 days
+- Calendar shifts: max 1 year
+
+All cleanup actions are logged so you can see what was removed.
+
+---
+
+_**User (2025-11-27 18:42Z)**_
+
+No, the +1 year function isn't correct - it imported December 2025 as 2026! 
+
+---
+
+_**Agent (model default, mode Agent)**_
+
+
+
+---
+
+
+Checking and fixing the year correction logic that incorrectly increments the year. Reviewing the current implementation:
+
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /home/thathunky/coffee_dealer/bot/handlers/messages.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /home/thathunky/coffee_dealer/bot/handlers/messages.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+
+
+---
+
+
+Fixing the overly aggressive year correction: it incorrectly increments the year. Trusting Gemini's parsed year unless clearly wrong, and removing or weakening the automatic correction:
+
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /home/thathunky/coffee_dealer/bot/handlers/messages.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **code_edit** • Edit file: /home/thathunky/coffee_dealer/bot/handlers/messages.py</summary>
+
+**Chunk 1**
+Lines added: 10, lines removed: 24
+
+```diff
+@@ -101,33 +101,19 @@
+          return
+      
+-     # Validate and correct year if it seems wrong
+-     # If we&#39;re importing December and it&#39;s already November/December, it&#39;s likely next year
++     # Only correct year if it&#39;s clearly wrong (much older than current year)
++     # Trust Gemini&#39;s parsing - only fix obvious errors
+      current_date = date.today()
+      current_year = current_date.year
+      current_month = current_date.month
+      
+-     print(f&quot;📅 [IMAGE IMPORT] Current date: {current_date} (year={current_year}, month={current_month})&quot;)
++     logger.info(f&quot;[IMAGE IMPORT] Current date: {current_date} (year={current_year}, month={current_month})&quot;)
+      
+-     # Special handling for December calendars imported in Nov/Dec - likely next year
+-     if month == 12 and current_month &gt;= 11:
+-         expected_year = current_year + 1
+-         if year &lt;= current_year:  # If parsed year is current year or older
+-             print(f&quot;⚠️ [IMAGE IMPORT] Correcting December year from {year} to {expected_year} (importing in {current_year}-{current_month:02d})&quot;)
+-             year = expected_year
+-             # Fix all assignment dates
+-             corrected_count = 0
+-             for assignment in assignments:
+-                 date_str = assignment.get(&quot;date&quot;, &quot;&quot;)
+-                 if date_str:
+-                     try:
+-                         parsed_date = datetime.strptime(date_str, &quot;%Y-%m-%d&quot;)
+-                         old_date = assignment[&quot;date&quot;]
+-                         assignment[&quot;date&quot;] = f&quot;{year}-{month:02d}-{parsed_date.day:02d}&quot;
+-                         if old_date != assignment[&quot;date&quot;]:
+-                             corrected_count += 1
+-                             print(f&quot;📅 [IMAGE IMPORT]   Corrected date: {old_date} -&gt; {assignment[&#39;date&#39;]}&quot;)
+-                     except ValueError as e:
+-                         print(f&quot;⚠️ [IMAGE IMPORT]   Failed to parse date {date_str}: {e}&quot;)
+-             print(f&quot;📅 [IMAGE IMPORT] Corrected {corrected_count} assignment dates&quot;)
++     # Only correct if year is more than 1 year in the past (likely a misread)
++     # Don&#39;t automatically assume December = next year - trust Gemini&#39;s parsing
++     if year &lt; current_year - 1:
++         # Year is more than 1 year old - likely wrong, but be conservative
++         # Only correct if it&#39;s clearly an old year (e.g., 2023 or earlier when we&#39;re in 2024+)
++         logger.warning(f&quot;[IMAGE IMPORT] Parsed year {year} is more than 1 year in the past. Trusting Gemini&#39;s parsing unless clearly wrong.&quot;)
++         # Don&#39;t auto-correct - the year might be correct for historical imports
+      
+      if not assignments:
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<tool-use data-tool-type="unknown" data-tool-name="read_lints">
+<details>
+<summary>Tool use: **read_lints**</summary>
+
+Status: **loading**
+
+
+</details>
+</tool-use>
+
+---
+
+
+
+---
+
+
 
 ---
 
@@ -4074,66 +4700,6 @@ Status: **loading**
 
 ---
 
-
-
----
-
-
-
----
-
-<tool-use data-tool-type="unknown" data-tool-name="search_replace">
-<details>
-<summary>Tool use: **search_replace**</summary>
-
-Status: **loading**
-
-
-</details>
-</tool-use>
-
----
-
-
-
----
-
-
-
----
-
-
-
----
-
-
-
----
-
-
-
----
-
-
-
----
-
-
-
----
-
-
-
----
-
-
-
----
-
-
-
----
-
 <tool-use data-tool-type="unknown" data-tool-name="read_file">
 <details>
 <summary>Tool use: **read_file**</summary>
@@ -4143,42 +4709,6 @@ Status: **loading**
 
 </details>
 </tool-use>
-
----
-
-
-
----
-
-
-
----
-
-
-
----
-
-
-
----
-
-<tool-use data-tool-type="unknown" data-tool-name="read_file">
-<details>
-<summary>Tool use: **read_file**</summary>
-
-Status: **loading**
-
-
-</details>
-</tool-use>
-
----
-
-
-
----
-
-
 
 ---
 

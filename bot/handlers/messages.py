@@ -100,35 +100,21 @@ async def handle_image(message: Message):
         await message.answer("❌ Не вдалося визначити рік або місяць з зображення.")
         return
     
-    # Validate and correct year if it seems wrong
-    # If we're importing December and it's already November/December, it's likely next year
+    # Only correct year if it's clearly wrong (much older than current year)
+    # Trust Gemini's parsing - only fix obvious errors
     current_date = date.today()
     current_year = current_date.year
     current_month = current_date.month
     
-    print(f"📅 [IMAGE IMPORT] Current date: {current_date} (year={current_year}, month={current_month})")
+    logger.info(f"[IMAGE IMPORT] Current date: {current_date} (year={current_year}, month={current_month})")
     
-    # Special handling for December calendars imported in Nov/Dec - likely next year
-    if month == 12 and current_month >= 11:
-        expected_year = current_year + 1
-        if year <= current_year:  # If parsed year is current year or older
-            print(f"⚠️ [IMAGE IMPORT] Correcting December year from {year} to {expected_year} (importing in {current_year}-{current_month:02d})")
-            year = expected_year
-            # Fix all assignment dates
-            corrected_count = 0
-            for assignment in assignments:
-                date_str = assignment.get("date", "")
-                if date_str:
-                    try:
-                        parsed_date = datetime.strptime(date_str, "%Y-%m-%d")
-                        old_date = assignment["date"]
-                        assignment["date"] = f"{year}-{month:02d}-{parsed_date.day:02d}"
-                        if old_date != assignment["date"]:
-                            corrected_count += 1
-                            print(f"📅 [IMAGE IMPORT]   Corrected date: {old_date} -> {assignment['date']}")
-                    except ValueError as e:
-                        print(f"⚠️ [IMAGE IMPORT]   Failed to parse date {date_str}: {e}")
-            print(f"📅 [IMAGE IMPORT] Corrected {corrected_count} assignment dates")
+    # Only correct if year is more than 1 year in the past (likely a misread)
+    # Don't automatically assume December = next year - trust Gemini's parsing
+    if year < current_year - 1:
+        # Year is more than 1 year old - likely wrong, but be conservative
+        # Only correct if it's clearly an old year (e.g., 2023 or earlier when we're in 2024+)
+        logger.warning(f"[IMAGE IMPORT] Parsed year {year} is more than 1 year in the past. Trusting Gemini's parsing unless clearly wrong.")
+        # Don't auto-correct - the year might be correct for historical imports
     
     if not assignments:
         print(f"⚠️ [IMAGE IMPORT] No assignments found in parsed calendar")
