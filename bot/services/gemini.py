@@ -2,6 +2,7 @@
 
 import os
 import json
+from datetime import datetime
 from typing import Optional, Dict, Any, List
 from google.genai import Client
 from google.genai import types as genai_types
@@ -35,16 +36,17 @@ class GeminiService:
                 ("gemini-1.5-flash", "1.5"),  # Fallback to 1.5 flash
             ]
 
-            # Try to get the first available model
+            # Try to use the first available model (just set it, API will error if invalid)
+            # We'll use the latest model by default and let API calls fail gracefully
             for model_name, version in model_names:
-                try:
-                    # Check if model exists by trying to get it
-                    genai_client.models.get(name=f"models/{model_name}")
-                    self.model_name = model_name
-                    self.model_version = version
-                    break
-                except Exception:
-                    continue
+                # Just set the model - we'll discover if it works when we use it
+                self.model_name = model_name
+                self.model_version = version
+                print(f"✅ Gemini model set to: {model_name} (v{version})")
+                break
+            
+            if not self.model_name:
+                print(f"❌ No Gemini models configured!")
 
     def _get_thinking_config(
         self, message_complexity: float = 1.0
@@ -138,32 +140,51 @@ class GeminiService:
             [f"- {user['name']} (ID: {user['user_id']})" for user in available_users]
         )
 
-        prompt = f"""You are a shift scheduling assistant. Parse the following user request and extract the intent.
+        prompt = f"""You are a helpful and explainative shift scheduling assistant for a coffee shop. The user sent you a message. Respond with detailed, helpful explanations in Ukrainian.
 
 Available users:
 {users_context}
 
-User request: "{message}"
+User message: "{message}"
 
-Extract the following information:
-1. Action type: "swap", "assign", "unassign", "query", or "other"
-2. Dates mentioned (in YYYY-MM-DD format)
-3. User names or IDs mentioned
-4. Confidence level (0.0 to 1.0)
+First, determine the message type:
+- "greeting" - greetings (привіт, добрий день, дякую, etc.)
+- "shift_request" - requests about shifts (swap, assign, unassign, query about shifts)
+- "general" - general questions or conversation
+- "unclear" - unclear or ambiguous messages
+
+For shift requests, extract:
+- Action type: "swap", "request_shift", "query", "assign", "unassign"
+- Dates mentioned (in YYYY-MM-DD format)
+- User names or IDs mentioned
+
+For ALL message types, provide a detailed, explainative response in Ukrainian that:
+- Explains what you understood
+- Provides helpful information about what the user can do
+- Suggests relevant commands or actions
+- Is friendly and conversational
 
 Return ONLY a valid JSON object with this structure:
 {{
-    "action": "swap|assign|unassign|query|other",
-    "dates": ["YYYY-MM-DD"],
-    "user_names": ["name1", "name2"],
-    "user_ids": [123, 456],
+    "message_type": "greeting|shift_request|general|unclear",
+    "action": "swap|request_shift|query|assign|unassign|none",
+    "dates": ["2025-07-15"],
+    "user_names": ["name1"],
+    "user_ids": [123],
     "confidence": 0.95,
-    "summary": "Brief summary of the request"
+    "summary": "Brief description",
+    "response": "Detailed, explainative response message in Ukrainian (ALWAYS required, be helpful and explain what the user can do)"
 }}
 
-If dates are relative (e.g., "tomorrow", "next Monday"), try to infer the actual date based on today's context, but note it in the summary.
-If user names are mentioned, try to match them to the available users list.
-If the request is unclear, set confidence below 0.5 and action to "other".
+Important:
+- For greetings: set message_type="greeting", provide a friendly, detailed response explaining what the bot can do
+- For shift requests: set message_type="shift_request", extract dates and users, AND provide a detailed response explaining what will happen
+- For general questions: set message_type="general", provide a detailed, helpful response explaining capabilities
+- For unclear messages: set message_type="unclear", provide detailed guidance on how to use the bot, what commands are available, and examples
+- ALWAYS include a detailed "response" field that explains what you understood and what the user can do next
+- Be explainative, helpful, and provide examples when appropriate
+- Always respond in Ukrainian language
+- Be friendly, conversational, and educational
 """
 
         try:
@@ -197,6 +218,55 @@ If the request is unclear, set confidence below 0.5 and action to "other".
                 text = text.strip()
 
             parsed = json.loads(text)
+            
+            # Validate and set defaults
+            if "message_type" not in parsed:
+                parsed["message_type"] = "unclear"
+            
+            # Ensure response field exists for all message types (make it explainative)
+            if "response" not in parsed or not parsed.get("response"):
+                message_type = parsed.get("message_type", "unclear")
+                if message_type == "greeting":
+                    parsed["response"] = (
+                        "Привіт! 👋 Я бот для управління змінами в кав'ярні.\n\n"
+                        "Я можу допомогти вам:\n"
+                        "• Переглянути календар змін: /calendar\n"
+                        "• Переглянути історію: /history\n"
+                        "• Запитати про зміни природною мовою\n"
+                        "• Попросити змінити зміну (адміністратори розглянуть ваш запит)\n\n"
+                        "Використайте /help для повного списку команд. Чим можу допомогти?"
+                    )
+                elif message_type == "general":
+                    parsed["response"] = (
+                        "Я допоможу вам з управлінням змінами! 📅\n\n"
+                        "Ось що ви можете зробити:\n"
+                        "• /calendar - переглянути календар змін на поточний місяць\n"
+                        "• /history - переглянути минулі місяці\n"
+                        "• Надішліть повідомлення природною мовою, щоб запитати про зміни або попросити змінити їх\n\n"
+                        "Якщо у вас є питання про конкретні дні або зміни, просто напишіть мені!"
+                    )
+                elif message_type == "shift_request":
+                    parsed["response"] = (
+                        "Зрозумів ваш запит про зміни! ✅\n\n"
+                        "Ваш запит буде передано адміністраторам для розгляду. "
+                        "Вони отримають повідомлення та зможуть виконати ваш запит найближчим часом.\n\n"
+                        "Якщо потрібно переглянути календар, використайте /calendar"
+                    )
+                else:
+                    parsed["response"] = (
+                        "Не зовсім зрозумів ваш запит. 😅\n\n"
+                        "Ось що я можу зробити:\n"
+                        "• Показати календар змін: /calendar\n"
+                        "• Показати історію: /history\n"
+                        "• Прийняти запит на зміну зміни (наприклад: \"Поміняйся зі мною 15 липня\")\n"
+                        "• Відповісти на питання про зміни\n\n"
+                        "Спробуйте сформулювати запит інакше або використайте /help для довідки.\n\n"
+                        "Приклади запитів:\n"
+                        "• \"Які зміни у мене наступного тижня?\"\n"
+                        "• \"Можу я помінятися зміною 20 липня?\"\n"
+                        "• \"Покажи календар\""
+                    )
+            
             return parsed
         except Exception as e:
             # If thinking config fails (e.g., -1 not supported), retry without it
@@ -222,6 +292,21 @@ If the request is unclear, set confidence below 0.5 and action to "other".
                         text = text.strip()
 
                     parsed = json.loads(text)
+                    
+                    # Validate and set defaults
+                    if "message_type" not in parsed:
+                        parsed["message_type"] = "unclear"
+                    
+                    # Ensure response field exists for non-shift requests
+                    if parsed.get("message_type") in ["greeting", "general", "unclear"]:
+                        if "response" not in parsed or not parsed.get("response"):
+                            if parsed["message_type"] == "greeting":
+                                parsed["response"] = "Привіт! 👋 Я бот для управління змінами. Чим можу допомогти?"
+                            elif parsed["message_type"] == "general":
+                                parsed["response"] = "Я допоможу вам з управлінням змінами. Використайте /calendar для перегляду календаря."
+                            else:
+                                parsed["response"] = "Не зовсім зрозумів. Спробуйте сформулювати інакше або використайте /help."
+                    
                     return parsed
                 except Exception as retry_error:
                     print(
@@ -246,8 +331,11 @@ If the request is unclear, set confidence below 0.5 and action to "other".
             Parsed command dict
         """
         if not self.client or not self.model_name:
+            print(f"❌ Gemini service not available: client={self.client is not None}, model={self.model_name}")
             return None
 
+        print(f"🔍 Starting parse_user_management_command for: '{message[:100]}...'")
+        
         users_context = "\n".join(
             [
                 f"- {user['name']} (ID: {user['user_id']}, Color: {user.get('color_code', 'N/A')})"
@@ -255,31 +343,51 @@ If the request is unclear, set confidence below 0.5 and action to "other".
             ]
         )
 
-        prompt = f"""You are a user management assistant for admins. Parse the following admin command for adding or editing users.
+        prompt = f"""You are a flexible user management assistant for admins. Parse the following admin command for adding or editing users. Be lenient and try to understand the intent even if the command is informal or incomplete.
 
 Available users:
 {users_context}
 
 Admin command: "{message}"
 
-Extract the following information:
+Extract the following information (be flexible - extract what you can):
 1. Action: "add", "edit", "update", or "other"
-2. User ID (if mentioned)
-3. User name
-4. Color (if mentioned)
+2. User ID (if mentioned) - extract ALL digits, can be any length (e.g., 6503698207, 123456789)
+3. User name - extract the full name mentioned (can be partial match from available users)
+4. Color (if mentioned) - can be hex code, color name in English/Ukrainian, or emoji
 5. Other properties to update
+
+Supported color formats:
+- Hex codes: #FFD700, #FF69B4, #00CED1, etc.
+- English names: yellow, pink, blue, purple, green, orange, teal, lightblue, lightgreen, darkorange
+- Ukrainian names: жовтий, рожевий, голубий, фіолетовий, зелений, оранжевий, персиковий, синій
+- Emojis: 💛 (yellow), 🩷 (pink), 💙 (blue), 💜 (purple), 💚 (green), 🧡 (orange)
+
+Common command patterns (be flexible with variations):
+- "додай користувача 6503698207 з ім'ям Діана" → action: "add", user_id: 6503698207, name: "Діана"
+- "Створи користувача з ID 123456789, ім'я Марія" → action: "add", user_id: 123456789, name: "Марія"
+- "Зміни ім'я користувача 123456789 на Петро" → action: "edit", user_id: 123456789, name: "Петро"
+- "Зміни колір Діана на синій" → action: "edit", name: "Діана", color: "синій" (match name to available users)
+- "Зміни колір користувача Діана на синій" → action: "edit", name: "Діана", color: "синій"
+- "Діана синій" → action: "edit", name: "Діана", color: "синій" (if context suggests color change)
 
 Return ONLY a valid JSON object with this structure:
 {{
     "action": "add|edit|update|other",
-    "user_id": 123,
-    "name": "User Name",
-    "color": "#FFD700",
+    "user_id": 6503698207 or null,
+    "name": "User Name" or null,
+    "color": "#FFD700" or "yellow" or "жовтий" or "💛" or null,
     "confidence": 0.95,
     "summary": "Brief summary"
 }}
 
-If adding a new user, user_id might not be provided - in that case, set it to null.
+Important:
+- ALWAYS extract user_id as a NUMBER (integer), not a string - convert "6503698207" to 6503698207
+- If user_id is not mentioned but a name is, try to match the name to available users and extract their user_id
+- For colors, return the EXACT value mentioned by the user (hex, name, or emoji) - the system will convert it automatically
+- Be flexible: if the command is "Зміни колір Діана на синій", extract name="Діана" and color="синій", then match "Діана" to available users
+- If you can understand the intent even partially, set confidence >= 0.7 (be lenient)
+- If the command is unclear, set confidence < 0.7 and action to "other"
 """
 
         try:
@@ -292,37 +400,69 @@ If adding a new user, user_id might not be provided - in that case, set it to nu
                     thinking_config=thinking_config
                 )
 
+            print(f"🤖 Calling Gemini API for user management command: '{message[:100]}...'")
             response = self.client.models.generate_content(
                 model=f"models/{self.model_name}", contents=prompt, config=config
             )
 
             if hasattr(response, "text"):
                 text = response.text.strip()
+                print(f"📝 Got response text (length: {len(text)})")
             elif hasattr(response, "candidates") and response.candidates:
-                text = response.candidates[0].content.parts[0].text.strip()
+                if response.candidates[0].content and response.candidates[0].content.parts:
+                    text = response.candidates[0].content.parts[0].text.strip()
+                    print(f"📝 Got response from candidates (length: {len(text)})")
+                else:
+                    print(f"⚠️ Response has candidates but no content/parts")
+                    text = str(response).strip()
             else:
+                print(f"⚠️ Unexpected response format: {type(response)}")
                 text = str(response).strip()
+
+            print(f"📄 Raw response (first 500 chars): {text[:500]}")
 
             if text.startswith("```"):
                 text = text.split("```")[1]
                 if text.startswith("json"):
                     text = text[4:]
                 text = text.strip()
+                print(f"📄 Cleaned response (first 500 chars): {text[:500]}")
 
             parsed = json.loads(text)
+            
+            # Log successful parsing for debugging
+            print(f"✅ Parsed user management command: action={parsed.get('action')}, user_id={parsed.get('user_id')}, name={parsed.get('name')}, confidence={parsed.get('confidence')}")
+            
             return parsed
+        except json.JSONDecodeError as json_error:
+            print(f"❌ JSON parsing error in user management command: {json_error}")
+            print(f"❌ Response text (first 1000 chars): {text[:1000] if 'text' in locals() else 'N/A'}")
+            print(f"❌ Full response text: {text if 'text' in locals() else 'N/A'}")
+            return None
         except Exception as e:
+            print(f"❌ Error parsing user management command: {e}")
+            import traceback
+            print(f"❌ Traceback: {traceback.format_exc()}")
+            
             if config and "thinking" in str(e).lower():
+                print(f"🔄 Thinking config failed, retrying without thinking config...")
                 try:
                     response = self.client.models.generate_content(
                         model=f"models/{self.model_name}", contents=prompt, config=None
                     )
                     if hasattr(response, "text"):
                         text = response.text.strip()
+                        print(f"📝 Retry: Got response text (length: {len(text)})")
                     elif hasattr(response, "candidates") and response.candidates:
-                        text = response.candidates[0].content.parts[0].text.strip()
+                        if response.candidates[0].content and response.candidates[0].content.parts:
+                            text = response.candidates[0].content.parts[0].text.strip()
+                            print(f"📝 Retry: Got response from candidates (length: {len(text)})")
+                        else:
+                            text = str(response).strip()
                     else:
                         text = str(response).strip()
+
+                    print(f"📄 Retry: Raw response (first 500 chars): {text[:500]}")
 
                     if text.startswith("```"):
                         text = text.split("```")[1]
@@ -331,11 +471,17 @@ If adding a new user, user_id might not be provided - in that case, set it to nu
                         text = text.strip()
 
                     parsed = json.loads(text)
+                    print(f"✅ Parsed user management command (retry): action={parsed.get('action')}, user_id={parsed.get('user_id')}, name={parsed.get('name')}, confidence={parsed.get('confidence')}")
                     return parsed
-                except:
+                except Exception as retry_error:
+                    print(f"❌ Error parsing user management command (retry failed): {retry_error}")
+                    import traceback
+                    print(f"❌ Retry traceback: {traceback.format_exc()}")
+                    if 'text' in locals():
+                        print(f"❌ Retry response text (first 1000 chars): {text[:1000]}")
                     return None
-            print(f"Error parsing user management command: {e}")
-            return None
+            else:
+                return None
 
     async def parse_admin_command(
         self,
@@ -467,6 +613,22 @@ Only return actions with confidence > 0.7.
                 print(f"Error parsing admin command with Gemini: {e}")
                 return None
 
+    def _detect_image_format(self, image_data: bytes) -> str:
+        """Detect image format from magic bytes"""
+        if len(image_data) < 8:
+            return "image/jpeg"  # Default to JPEG
+        
+        # Check magic bytes
+        if image_data[:2] == b'\xff\xd8':
+            return "image/jpeg"
+        elif image_data[:8] == b'\x89PNG\r\n\x1a\n':
+            return "image/png"
+        elif image_data[:4] == b'RIFF' and image_data[8:12] == b'WEBP':
+            return "image/webp"
+        else:
+            # Default to JPEG (Telegram standard)
+            return "image/jpeg"
+
     async def parse_calendar_image(
         self, image_data: bytes, available_users: List[Dict[str, Any]]
     ) -> Optional[Dict[str, Any]]:
@@ -488,7 +650,12 @@ Only return actions with confidence > 0.7.
             }
         """
         if not self.client or not self.model_name:
+            print("❌ Gemini client or model not initialized")
             return None
+        
+        # Detect image format
+        mime_type = self._detect_image_format(image_data)
+        print(f"📸 Detected image format: {mime_type}, size: {len(image_data)} bytes")
 
         # Build user context with color mappings
         users_context = "\n".join(
@@ -505,26 +672,38 @@ Available users and their colors:
 
 The calendar shows colored days representing shift assignments. Each color corresponds to a user or combination of users.
 
+CRITICAL: Carefully examine the calendar image to determine:
+1. The EXACT month and year displayed in the calendar header/title (look for month names like "листопад", "November", "липень", "July", etc.)
+2. The day numbers visible in the calendar grid
+3. Which days have colored assignments
+
 Extract the following information:
-1. Year and month shown in the calendar
+1. Year and month - READ THE CALENDAR HEADER CAREFULLY. Do NOT guess or assume. Look for:
+   - Month names in Ukrainian (січень, лютий, березень, квітень, травень, червень, липень, серпень, вересень, жовтень, листопад, грудень)
+   - Month names in English (January, February, March, April, May, June, July, August, September, October, November, December)
+   - Year number (e.g., 2025, 2024)
+   - If the calendar shows "листопад" or "November", the month is 11, NOT 7
+   - If the calendar shows "липень" or "July", the month is 7
+   - Be VERY careful to match the month name you see in the image
+
 2. For each day with a colored assignment, extract:
-   - Date (YYYY-MM-DD format)
-   - User name(s) based on color matching
+   - Date (YYYY-MM-DD format) - use the EXACT month/year from the calendar header
+   - User name(s) based on color matching to available users
    - Color code (if visible or can be inferred)
 
 Return ONLY a valid JSON object with this structure:
 {{
     "year": 2025,
-    "month": 7,
+    "month": 11,
     "assignments": [
         {{
-            "date": "2025-07-15",
+            "date": "2025-11-15",
             "user_names": ["Дана"],
             "user_ids": [123],
             "color": "#FF69B4"
         }},
         {{
-            "date": "2025-07-16",
+            "date": "2025-11-16",
             "user_names": ["Діана", "Дана"],
             "user_ids": [456, 123],
             "color": "#9370DB"
@@ -533,11 +712,14 @@ Return ONLY a valid JSON object with this structure:
 }}
 
 Important:
+- READ THE CALENDAR HEADER FIRST - identify the month name and year before extracting dates
 - Match colors to users based on the available users list
 - If multiple users share a day (combined color), list all of them
 - Only include days that have assignments (colored days)
-- If you can't determine the exact date, use the month/year from the calendar header
+- Use the EXACT month and year from the calendar image, not assumptions
 - Match user names exactly as they appear in the available users list
+- Double-check: if you see "листопад" or "November" in the calendar, month should be 11, not 7
+- Double-check: if you see "липень" or "July" in the calendar, month should be 7, not 11
 """
 
         try:
@@ -552,11 +734,12 @@ Important:
                 )
 
             # Send image to Gemini
-            # Create image part using inline data
+            # Create image part using inline data with detected format
             image_part = genai_types.Part(
-                inline_data=genai_types.Blob(data=image_data, mimeType="image/png")
+                inline_data=genai_types.Blob(data=image_data, mimeType=mime_type)
             )
 
+            print(f"🤖 Sending image to Gemini API (model: {self.model_name})...")
             response = self.client.models.generate_content(
                 model=f"models/{self.model_name}",
                 contents=[prompt, image_part],
@@ -564,57 +747,193 @@ Important:
             )
 
             # Extract text from response
+            text = None
             if hasattr(response, "text"):
                 text = response.text.strip()
+                print(f"✅ Got response text (length: {len(text)})")
             elif hasattr(response, "candidates") and response.candidates:
-                text = response.candidates[0].content.parts[0].text.strip()
+                if response.candidates[0].content and response.candidates[0].content.parts:
+                    text = response.candidates[0].content.parts[0].text.strip()
+                    print(f"✅ Got response from candidates (length: {len(text)})")
+                else:
+                    print(f"⚠️ Response candidates exist but no content parts found")
+                    print(f"Response structure: {type(response.candidates[0])}")
             else:
                 text = str(response).strip()
+                print(f"⚠️ Using string representation of response (length: {len(text)})")
+            
+            if not text:
+                print("❌ No text content in Gemini response")
+                print(f"Response type: {type(response)}")
+                print(f"Response attributes: {dir(response)}")
+                return None
 
             # Remove markdown code blocks if present
+            original_text = text
             if text.startswith("```"):
                 text = text.split("```")[1]
                 if text.startswith("json"):
                     text = text[4:]
                 text = text.strip()
 
-            parsed = json.loads(text)
-            return parsed
+            # Log first 200 chars of response for debugging
+            preview = text[:200] if len(text) > 200 else text
+            print(f"📝 Response preview: {preview}...")
+
+            try:
+                parsed = json.loads(text)
+                print(f"✅ Successfully parsed JSON response")
+                
+                # Validate response structure
+                if not isinstance(parsed, dict):
+                    print(f"❌ Parsed response is not a dict: {type(parsed)}")
+                    return None
+                
+                if "year" not in parsed or "month" not in parsed:
+                    print(f"❌ Missing year or month in response: {parsed.keys()}")
+                    return None
+                
+                # Validate month is reasonable (1-12)
+                month = parsed.get("month")
+                if not isinstance(month, int) or month < 1 or month > 12:
+                    print(f"❌ Invalid month value: {month} (must be 1-12)")
+                    return None
+                
+                # Validate year is reasonable (2020-2030)
+                year = parsed.get("year")
+                if not isinstance(year, int) or year < 2020 or year > 2030:
+                    print(f"❌ Invalid year value: {year} (must be 2020-2030)")
+                    return None
+                
+                if "assignments" not in parsed:
+                    print(f"⚠️ No assignments in response, using empty list")
+                    parsed["assignments"] = []
+                
+                # Validate all assignment dates match the extracted month/year
+                for assignment in parsed.get("assignments", []):
+                    date_str = assignment.get("date", "")
+                    if date_str:
+                        try:
+                            from datetime import datetime
+                            parsed_date = datetime.strptime(date_str, "%Y-%m-%d")
+                            if parsed_date.year != year or parsed_date.month != month:
+                                print(f"⚠️ Assignment date {date_str} doesn't match calendar month/year ({year}-{month:02d})")
+                                # Fix the date to match the calendar month/year
+                                assignment["date"] = f"{year}-{month:02d}-{parsed_date.day:02d}"
+                                print(f"✅ Fixed date to: {assignment['date']}")
+                        except ValueError:
+                            print(f"⚠️ Invalid date format in assignment: {date_str}")
+                
+                print(f"✅ Validated response: year={year}, month={month}, assignments={len(parsed.get('assignments', []))}")
+                return parsed
+            except json.JSONDecodeError as json_error:
+                print(f"❌ JSON parsing error: {json_error}")
+                print(f"❌ Text that failed to parse: {text[:500]}")
+                return None
         except Exception as e:
+            import traceback
+            error_traceback = traceback.format_exc()
+            print(f"❌ Error parsing calendar image: {e}")
+            print(f"❌ Full traceback:\n{error_traceback}")
+            
             # If thinking config fails, retry without it
             if config and "thinking" in str(e).lower():
-                print(f"Thinking config failed for image, retrying without: {e}")
+                print(f"🔄 Thinking config failed, retrying without thinking config...")
                 try:
                     image_part = genai_types.Part(
                         inline_data=genai_types.Blob(
-                            data=image_data, mimeType="image/png"
+                            data=image_data, mimeType=mime_type
                         )
                     )
+                    print(f"🤖 Retrying Gemini API call without thinking config...")
                     response = self.client.models.generate_content(
                         model=f"models/{self.model_name}",
                         contents=[prompt, image_part],
                         config=None,
                     )
+                    
+                    # Extract text from response
+                    text = None
                     if hasattr(response, "text"):
                         text = response.text.strip()
+                        print(f"✅ Got response text on retry (length: {len(text)})")
                     elif hasattr(response, "candidates") and response.candidates:
-                        text = response.candidates[0].content.parts[0].text.strip()
+                        if response.candidates[0].content and response.candidates[0].content.parts:
+                            text = response.candidates[0].content.parts[0].text.strip()
+                            print(f"✅ Got response from candidates on retry (length: {len(text)})")
                     else:
                         text = str(response).strip()
+                        print(f"⚠️ Using string representation on retry (length: {len(text)})")
+                    
+                    if not text:
+                        print("❌ No text content in Gemini response (retry)")
+                        return None
 
+                    # Remove markdown code blocks if present
                     if text.startswith("```"):
                         text = text.split("```")[1]
                         if text.startswith("json"):
                             text = text[4:]
                         text = text.strip()
 
-                    parsed = json.loads(text)
-                    return parsed
+                    # Log preview
+                    preview = text[:200] if len(text) > 200 else text
+                    print(f"📝 Retry response preview: {preview}...")
+
+                    try:
+                        parsed = json.loads(text)
+                        print(f"✅ Successfully parsed JSON response on retry")
+                        
+                        # Validate response structure
+                        if not isinstance(parsed, dict):
+                            print(f"❌ Parsed response is not a dict: {type(parsed)}")
+                            return None
+                        
+                        if "year" not in parsed or "month" not in parsed:
+                            print(f"❌ Missing year or month in response: {parsed.keys()}")
+                            return None
+                        
+                        # Validate month is reasonable (1-12)
+                        month = parsed.get("month")
+                        if not isinstance(month, int) or month < 1 or month > 12:
+                            print(f"❌ Invalid month value: {month} (must be 1-12)")
+                            return None
+                        
+                        # Validate year is reasonable (2020-2030)
+                        year = parsed.get("year")
+                        if not isinstance(year, int) or year < 2020 or year > 2030:
+                            print(f"❌ Invalid year value: {year} (must be 2020-2030)")
+                            return None
+                        
+                        if "assignments" not in parsed:
+                            parsed["assignments"] = []
+                        
+                        # Validate all assignment dates match the extracted month/year
+                        for assignment in parsed.get("assignments", []):
+                            date_str = assignment.get("date", "")
+                            if date_str:
+                                try:
+                                    parsed_date = datetime.strptime(date_str, "%Y-%m-%d")
+                                    if parsed_date.year != year or parsed_date.month != month:
+                                        print(f"⚠️ Assignment date {date_str} doesn't match calendar month/year ({year}-{month:02d})")
+                                        # Fix the date to match the calendar month/year
+                                        assignment["date"] = f"{year}-{month:02d}-{parsed_date.day:02d}"
+                                        print(f"✅ Fixed date to: {assignment['date']}")
+                                except ValueError:
+                                    print(f"⚠️ Invalid date format in assignment: {date_str}")
+                        
+                        print(f"✅ Validated retry response: year={year}, month={month}, assignments={len(parsed.get('assignments', []))}")
+                        return parsed
+                    except json.JSONDecodeError as json_error:
+                        print(f"❌ JSON parsing error on retry: {json_error}")
+                        print(f"❌ Text that failed to parse: {text[:500]}")
+                        return None
                 except Exception as retry_error:
-                    print(f"Error parsing calendar image (retry failed): {retry_error}")
+                    retry_traceback = traceback.format_exc()
+                    print(f"❌ Error parsing calendar image (retry failed): {retry_error}")
+                    print(f"❌ Retry traceback:\n{retry_traceback}")
                     return None
             else:
-                print(f"Error parsing calendar image: {e}")
                 return None
 
 

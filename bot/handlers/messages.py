@@ -1,5 +1,6 @@
 """Message handlers for natural language processing"""
 
+import io
 from datetime import date, datetime, timedelta
 from typing import List, Dict, Any
 from aiogram import Router, F
@@ -31,13 +32,26 @@ async def handle_image(message: Message):
     
     # Download image
     file = await message.bot.get_file(photo.file_id)
-    image_data = await message.bot.download_file(file.file_path)
+    image_file = await message.bot.download_file(file.file_path)
+    
+    # Read bytes from BytesIO object (download_file returns BytesIO in some aiogram versions)
+    if isinstance(image_file, io.BytesIO):
+        image_data = image_file.read()
+    elif isinstance(image_file, bytes):
+        image_data = image_file
+    elif hasattr(image_file, 'read'):
+        image_data = image_file.read()
+    else:
+        # Fallback: try to convert to bytes
+        image_data = bytes(image_file) if image_file else b''
     
     await message.answer("🔄 Аналізую зображення календаря...")
     
+    print(f"📸 Received image: {len(image_data)} bytes, file_id: {photo.file_id}")
+    
     # Get users for context
     async with async_session_maker() as session:
-        users = await get_all_users(session)
+        users = await get_all_users(session, include_hidden=False)
         users_dict = {u.user_id: u for u in users}
         users_list = [
             {
@@ -48,14 +62,18 @@ async def handle_image(message: Message):
             }
             for u in users
         ]
+        print(f"👥 Loaded {len(users_list)} users for context")
     
     # Parse image with Gemini
+    print(f"🤖 Calling Gemini API to parse calendar image...")
     parsed = await gemini_service.parse_calendar_image(image_data, users_list)
     
     if not parsed:
+        print("❌ Gemini parsing returned None")
         await message.answer(
             "❌ Не вдалося розпізнати календар на зображенні. "
-            "Переконайтеся, що зображення містить календар з кольоровими днями."
+            "Переконайтеся, що зображення містить календар з кольоровими днями.\n\n"
+            "Перевірте логи для деталей помилки."
         )
         return
     
@@ -63,12 +81,24 @@ async def handle_image(message: Message):
     month = parsed.get("month")
     assignments = parsed.get("assignments", [])
     
-    if not year or not month or not assignments:
-        await message.answer("❌ Не вдалося визначити рік, місяць або призначення з зображення.")
+    print(f"📅 Parsed calendar: year={year}, month={month}, assignments={len(assignments)}")
+    
+    if not year or not month:
+        print(f"❌ Missing year or month: year={year}, month={month}")
+        await message.answer("❌ Не вдалося визначити рік або місяць з зображення.")
+        return
+    
+    if not assignments:
+        print(f"⚠️ No assignments found in parsed calendar")
+        await message.answer(
+            f"⚠️ Календарь розпізнано ({month}/{year}), але не знайдено призначень. "
+            "Можливо, всі дні порожні або кольори не відповідають користувачам."
+        )
         return
     
     # Apply assignments to database
     executed = []
+    failed = []
     async with async_session_maker() as session:
         for assignment in assignments:
             try:
@@ -77,35 +107,64 @@ async def handle_image(message: Message):
                 user_ids = assignment.get("user_ids", [])
                 
                 if not date_str:
+                    print(f"⚠️ Assignment missing date: {assignment}")
+                    failed.append(f"⚠️ Пропущено (немає дати): {assignment.get('user_names', ['Unknown'])}")
                     continue
                 
-                shift_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+                try:
+                    shift_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+                except ValueError as date_error:
+                    print(f"❌ Invalid date format '{date_str}': {date_error}")
+                    failed.append(f"❌ Невірна дата: {date_str}")
+                    continue
                 
                 # Match user names to user IDs if IDs not provided
                 if not user_ids and user_names:
                     matched_ids = []
                     for name in user_names:
+                        matched = False
                         for user in users:
                             if user.name == name or user.name.lower() == name.lower():
                                 matched_ids.append(user.user_id)
+                                matched = True
                                 break
+                        if not matched:
+                            print(f"⚠️ User name '{name}' not found in users list")
                     user_ids = matched_ids
                 
                 if user_ids:
                     await create_or_update_shift(session, shift_date, user_ids)
                     executed.append(f"✅ {date_str}: {', '.join(user_names)}")
+                    print(f"✅ Imported shift for {date_str}: {user_names}")
+                else:
+                    print(f"⚠️ No user IDs matched for {date_str}: {user_names}")
+                    failed.append(f"⚠️ {date_str}: не знайдено користувачів ({', '.join(user_names)})")
             except Exception as e:
-                executed.append(f"❌ Помилка для {assignment.get('date', 'unknown')}: {str(e)}")
+                import traceback
+                print(f"❌ Error processing assignment {assignment}: {e}")
+                print(f"❌ Traceback: {traceback.format_exc()}")
+                failed.append(f"❌ Помилка для {assignment.get('date', 'unknown')}: {str(e)}")
     
     if executed:
         summary = "\n".join(executed[:20])  # Limit to first 20
         if len(executed) > 20:
             summary += f"\n... та ще {len(executed) - 20} призначень"
-        await message.answer(
-            f"✅ Календарь імпортовано для {month}/{year}:\n\n{summary}"
-        )
+        
+        response_text = f"✅ Календарь імпортовано для {month}/{year}:\n\n{summary}"
+        
+        if failed:
+            response_text += f"\n\n⚠️ Помилки ({len(failed)}):\n" + "\n".join(failed[:10])
+            if len(failed) > 10:
+                response_text += f"\n... та ще {len(failed) - 10} помилок"
+        
+        await message.answer(response_text)
+        print(f"✅ Successfully imported {len(executed)} shifts, {len(failed)} failed")
     else:
-        await message.answer("⚠️ Не вдалося імпортувати жодних призначень.")
+        error_msg = "⚠️ Не вдалося імпортувати жодних призначень."
+        if failed:
+            error_msg += f"\n\nПомилки:\n" + "\n".join(failed[:10])
+        await message.answer(error_msg)
+        print(f"❌ Failed to import any shifts. Errors: {len(failed)}")
 
 
 @router.message(F.text & ~F.text.startswith("/"))
@@ -144,40 +203,162 @@ async def handle_user_request(
     user_id: int,
     users_list: List[Dict[str, Any]]
 ):
-    """Handle user request - create request and notify admins"""
+    """Handle user request - fully NLP powered"""
     text = message.text
     
     # Parse with Gemini
     parsed_intent = await gemini_service.parse_user_request(text, users_list)
     
     if not parsed_intent:
+        # Fallback response if parsing completely fails - be very explainative
         await message.answer(
-            "❌ Не вдалося обробити ваш запит. "
-            "Будь ласка, спробуйте сформулювати його інакше або зверніться до адміністратора."
+            "Привіт! 👋 Я бот для управління змінами в кав'ярні.\n\n"
+            "Я розумію повідомлення природною мовою та можу допомогти з:\n\n"
+            "📅 <b>Перегляд календаря:</b>\n"
+            "• /calendar - показати календар на поточний місяць\n"
+            "• /history - переглянути минулі місяці\n\n"
+            "💬 <b>Запити природною мовою:</b>\n"
+            "• \"Які зміни у мене наступного тижня?\"\n"
+            "• \"Можу я помінятися зміною 20 липня?\"\n"
+            "• \"Покажи мені календар на липень\"\n\n"
+            "📝 <b>Запити на зміну:</b>\n"
+            "Просто напишіть, що ви хочете змінити, і адміністратори отримають ваш запит.\n\n"
+            "Використайте /help для повного списку команд або просто напишіть мені своє питання!"
         )
         return
     
-    # Create request in database
-    async with async_session_maker() as session:
-        request = await create_request(
-            session,
-            user_id=user_id,
-            message=text,
-            parsed_intent=parsed_intent
+    message_type = parsed_intent.get("message_type", "unclear")
+    response_text = parsed_intent.get("response")
+    
+    # Handle different message types - always use explainative responses
+    if message_type == "greeting":
+        # Direct response for greetings - use Gemini's response or detailed fallback
+        if response_text:
+            await message.answer(response_text, parse_mode="HTML")
+        else:
+            await message.answer(
+                "Привіт! 👋 Я бот для управління змінами в кав'ярні.\n\n"
+                "<b>Що я можу зробити:</b>\n"
+                "• Показати календар змін: /calendar\n"
+                "• Показати історію: /history\n"
+                "• Відповісти на питання про зміни природною мовою\n"
+                "• Прийняти ваш запит на зміну зміни\n\n"
+                "Просто напишіть мені своє питання або використайте /help для повного списку команд!",
+                parse_mode="HTML"
+            )
+        return
+    
+    elif message_type == "general":
+        # Direct response for general questions - use Gemini's response or detailed fallback
+        if response_text:
+            await message.answer(response_text, parse_mode="HTML")
+        else:
+            await message.answer(
+                "Я допоможу вам з управлінням змінами! 📅\n\n"
+                "<b>Доступні можливості:</b>\n"
+                "• /calendar - переглянути календар змін на поточний місяць\n"
+                "• /history - переглянути минулі місяці\n"
+                "• Надішліть повідомлення природною мовою для запитів про зміни\n\n"
+                "<b>Приклади запитів:</b>\n"
+                "• \"Які зміни у мене наступного тижня?\"\n"
+                "• \"Покажи календар на липень\"\n"
+                "• \"Можу я помінятися зміною?\"\n\n"
+                "Що саме вас цікавить?",
+                parse_mode="HTML"
+            )
+        return
+    
+    elif message_type == "unclear":
+        # Helpful response for unclear messages - use Gemini's response or detailed fallback
+        if response_text:
+            await message.answer(response_text, parse_mode="HTML")
+        else:
+            await message.answer(
+                "Не зовсім зрозумів ваш запит. 😅\n\n"
+                "<b>Ось що я можу зробити:</b>\n\n"
+                "📅 <b>Перегляд календаря:</b>\n"
+                "• /calendar - календар на поточний місяць\n"
+                "• /history - минулі місяці\n\n"
+                "💬 <b>Запити природною мовою:</b>\n"
+                "• \"Які зміни у мене наступного тижня?\"\n"
+                "• \"Покажи мені календар на липень\"\n"
+                "• \"Хто працює 15 липня?\"\n\n"
+                "📝 <b>Запити на зміну:</b>\n"
+                "• \"Можу я помінятися зміною 20 липня?\"\n"
+                "• \"Зніми мене зі зміни 25 липня\"\n\n"
+                "Спробуйте сформулювати інакше або використайте /help для повної довідки.",
+                parse_mode="HTML"
+            )
+        return
+    
+    elif message_type == "shift_request":
+        # Handle shift-related requests - create request and notify admins
+        action = parsed_intent.get("action")
+        dates = parsed_intent.get("dates", [])
+        
+        # If it's just a query (no action needed), respond directly with explanation
+        if action == "query" and not dates:
+            if response_text:
+                await message.answer(response_text, parse_mode="HTML")
+            else:
+                await message.answer(
+                    "Для перегляду календаря змін використайте:\n\n"
+                    "• /calendar - показати календар на поточний місяць\n"
+                    "• /history - переглянути минулі місяці\n\n"
+                    "Або запитайте конкретно, наприклад:\n"
+                    "• \"Покажи мені календар на липень\"\n"
+                    "• \"Які зміни у мене наступного тижня?\"",
+                    parse_mode="HTML"
+                )
+            return
+        
+        # Create request in database for actual shift changes
+        async with async_session_maker() as session:
+            request = await create_request(
+                session,
+                user_id=user_id,
+                message=text,
+                parsed_intent=parsed_intent
+            )
+        
+        # Notify admins
+        await notify_admins_of_request(
+            message.bot,
+            request.id,
+            user_id,
+            text,
+            parsed_intent
         )
-    
-    # Notify admins
-    await notify_admins_of_request(
-        message.bot,
-        request.id,
-        user_id,
-        text,
-        parsed_intent
-    )
-    
-    await message.answer(
-        "✅ Ваш запит отримано! Адміністратори були повідомлені та розглянуть його найближчим часом."
-    )
+        
+        # Provide explainative response about what happened
+        if response_text:
+            await message.answer(
+                f"{response_text}\n\n"
+                "✅ Ваш запит також було передано адміністраторам для розгляду. "
+                "Вони отримають повідомлення та зможуть виконати ваш запит найближчим часом.",
+                parse_mode="HTML"
+            )
+        else:
+            summary = parsed_intent.get("summary", "ваш запит")
+            await message.answer(
+                f"Зрозумів ваш запит: {summary}\n\n"
+                "✅ Ваш запит отримано та передано адміністраторам для розгляду.\n\n"
+                "Адміністратори отримають повідомлення про ваш запит та зможуть виконати його найближчим часом.\n\n"
+                "Якщо потрібно переглянути календар, використайте /calendar",
+                parse_mode="HTML"
+            )
+    else:
+        # Fallback for unknown types - be explainative
+        if response_text:
+            await message.answer(response_text, parse_mode="HTML")
+        else:
+            await message.answer(
+                "Дякую за повідомлення! 📝\n\n"
+                "Якщо це запит про зміни, він буде передано адміністраторам для розгляду.\n\n"
+                "Для перегляду календаря використайте /calendar або /history.\n"
+                "Для повної довідки - /help",
+                parse_mode="HTML"
+            )
 
 
 async def handle_admin_nlp_command(
@@ -188,11 +369,29 @@ async def handle_admin_nlp_command(
     """Handle admin natural language command - execute directly"""
     text = message.text
     
-    # Check if it's a user management command
-    user_management_keywords = ["додай користувача", "add user", "створи користувача", 
-                                "edit user", "редагуй користувача", "зміни користувача",
-                                "додати користувача", "створити користувача"]
-    if any(keyword in text.lower() for keyword in user_management_keywords):
+    # Check if it's a user management command - be more flexible
+    text_lower = text.lower()
+    user_management_keywords = [
+        "додай користувача", "add user", "створи користувача", 
+        "edit user", "редагуй користувача", "зміни користувача",
+        "додати користувача", "створити користувача",
+        "зміни колір", "change color", "змінити колір", "set color",
+        "зміни ім'я", "change name", "змінити ім'я", "set name",
+        "колір", "color", "ім'я", "name", "користувач", "user"
+    ]
+    # Also check if it mentions a user name/ID without dates
+    has_user_mention = any(keyword in text_lower for keyword in ["користувач", "user", "ім'я", "name", "колір", "color"])
+    has_date_mention = any(keyword in text_lower for keyword in ["дата", "date", "липня", "серпня", "вересня", "жовтня", "листопада", "грудня", 
+                                                                  "січня", "лютого", "березня", "квітня", "травня", "червня",
+                                                                  "завтра", "сьогодні", "післязавтра", "tomorrow", "today"])
+    
+    # If it's clearly user management (has user keywords but no dates), route there
+    if has_user_mention and not has_date_mention:
+        await handle_user_management_nlp(message, users_list, users_dict)
+        return
+    
+    # Also check explicit user management keywords
+    if any(keyword in text_lower for keyword in user_management_keywords):
         await handle_user_management_nlp(message, users_list, users_dict)
         return
     
@@ -218,15 +417,39 @@ async def handle_admin_nlp_command(
     
     if not parsed:
         await message.answer(
-            "❌ Не вдалося обробити команду. "
-            "Будь ласка, спробуйте сформулювати її інакше."
+            "❌ Не вдалося обробити команду.\n\n"
+            "<b>Як адміністратор, ви можете:</b>\n\n"
+            "📅 <b>Управління змінами:</b>\n"
+            "• \"Призначти Івана на 15 липня\"\n"
+            "• \"Зніми Марію зі зміни 20 липня\"\n"
+            "• \"Очистити 25 липня\"\n"
+            "• \"Поміняти зміни 15 і 20 липня\"\n\n"
+            "👥 <b>Управління користувачами:</b>\n"
+            "• \"Додай користувача 123456789 з ім'ям Іван\"\n"
+            "• \"Зміни колір користувача 123456789 на #FF0000\"\n"
+            "• \"Зміни ім'я користувача 123456789 на Марія\"\n\n"
+            "📋 <b>Команди:</b>\n"
+            "• /listusers - список користувачів\n"
+            "• /calendar - календар\n"
+            "• /help - повна довідка\n\n"
+            "Спробуйте сформулювати команду інакше або використайте команди з /help.",
+            parse_mode="HTML"
         )
         return
     
     if parsed.get("confidence", 0) < 0.7:
         await message.answer(
-            f"⚠️ Низька впевненість у розпізнаванні ({parsed.get('confidence', 0):.0%}). "
-            "Будь ласка, уточніть команду."
+            f"⚠️ Низька впевненість у розпізнаванні ({parsed.get('confidence', 0):.0%}).\n\n"
+            "<b>Щоб покращити розпізнавання, будьте більш конкретними:</b>\n\n"
+            "• Вказуйте повні дати: \"15 липня 2025\" або \"2025-07-15\"\n"
+            "• Вказуйте повні імена користувачів або їх ID\n"
+            "• Використовуйте чіткі дії: \"призначити\", \"зняти\", \"очистити\"\n\n"
+            "<b>Приклади правильних команд:</b>\n"
+            "• \"Призначти користувача Іван на 15 липня 2025\"\n"
+            "• \"Зніми користувача 123456789 зі зміни 20 липня\"\n"
+            "• \"Очистити зміну на 25 липня\"\n\n"
+            "Спробуйте ще раз з більш конкретними даними.",
+            parse_mode="HTML"
         )
         return
     
@@ -237,8 +460,21 @@ async def handle_admin_nlp_command(
     
     if not dates or not user_ids:
         await message.answer(
-            "❌ Не вдалося визначити дати або користувачів. "
-            "Будь ласка, уточніть команду."
+            "❌ Не вдалося визначити дати або користувачів.\n\n"
+            "<b>Що потрібно для виконання команди:</b>\n\n"
+            "📅 <b>Дата:</b> Вкажіть конкретну дату\n"
+            "• \"15 липня 2025\"\n"
+            "• \"2025-07-15\"\n"
+            "• \"завтра\" (якщо це сьогодні)\n\n"
+            "👥 <b>Користувач:</b> Вкажіть ім'я або ID\n"
+            "• \"Іван\" (якщо є користувач з таким ім'ям)\n"
+            "• \"123456789\" (ID користувача)\n\n"
+            "<b>Приклади правильних команд:</b>\n"
+            "• \"Призначти користувача Іван на 15 липня 2025\"\n"
+            "• \"Зніми користувача 123456789 зі зміни 20 липня\"\n"
+            "• \"Призначти на 2025-07-15 користувача з ID 123456789\"\n\n"
+            "Спробуйте ще раз з повною інформацією.",
+            parse_mode="HTML"
         )
         return
     
@@ -295,27 +531,71 @@ async def handle_user_management_nlp(
     """Handle admin natural language commands for user management"""
     text = message.text
     
+    print(f"🤖 Processing user management command: {text}")
+    
     # Parse with Gemini
     parsed = await gemini_service.parse_user_management_command(text, users_list)
     
     if not parsed:
+        print(f"❌ Gemini returned None for command: {text}")
         await message.answer(
-            "❌ Не вдалося обробити команду управління користувачами. "
-            "Будь ласка, спробуйте сформулювати її інакше."
+            "❌ Не вдалося обробити команду управління користувачами.\n\n"
+            "<b>Як адміністратор, ви можете управляти користувачами:</b>\n\n"
+            "➕ <b>Додавання користувача:</b>\n"
+            "• \"Додай користувача 123456789 з ім'ям Іван\"\n"
+            "• \"Створи користувача з ID 123456789, ім'я Марія, колір #FF0000\"\n"
+            "• \"Додай нового користувача: ID 123456789, ім'я Олександр\"\n\n"
+            "✏️ <b>Редагування користувача:</b>\n"
+            "• \"Зміни ім'я користувача 123456789 на Петро\"\n"
+            "• \"Зміни колір користувача 123456789 на синій\"\n"
+            "• \"Оновити користувача 123456789: ім'я Анна, колір #00FF00\"\n\n"
+            "📋 <b>Команди:</b>\n"
+            "• /adduser &lt;user_id&gt; &lt;name&gt; [color] - додати користувача\n"
+            "• /edituser &lt;user_id&gt; &lt;changes&gt; - редагувати користувача\n"
+            "• /listusers - список всіх користувачів\n"
+            "• /setname &lt;user_id&gt; &lt;name&gt; - змінити ім'я\n"
+            "• /setcolor &lt;user_id&gt; &lt;color&gt; - змінити колір\n\n"
+            "Спробуйте сформулювати команду інакше або використайте команди з /help.",
+            parse_mode="HTML"
         )
         return
     
-    if parsed.get("confidence", 0) < 0.7:
+    # Lower confidence threshold - be more lenient
+    if parsed.get("confidence", 0) < 0.5:
         await message.answer(
-            f"⚠️ Низька впевненість у розпізнаванні ({parsed.get('confidence', 0):.0%}). "
-            "Будь ласка, уточніть команду."
+            f"⚠️ Не зовсім зрозумів команду (впевненість: {parsed.get('confidence', 0):.0%}).\n\n"
+            "<b>Спробуйте один з варіантів:</b>\n\n"
+            "👤 <b>Додавання користувача:</b>\n"
+            "• \"Додай користувача 123456789 з ім'ям Іван\"\n"
+            "• \"Створи користувача Іван, ID 123456789\"\n\n"
+            "✏️ <b>Редагування користувача:</b>\n"
+            "• \"Зміни колір Діана на синій\"\n"
+            "• \"Зміни ім'я користувача 123456789 на Петро\"\n"
+            "• \"Діана синій\" (якщо контекст зрозумілий)\n\n"
+            "Або використайте команди: /setcolor, /setname, /adduser",
+            parse_mode="HTML"
         )
         return
     
     action = parsed.get("action")
-    user_id = parsed.get("user_id")
+    user_id_raw = parsed.get("user_id")
     name = parsed.get("name")
     color = parsed.get("color")
+    
+    # Convert user_id to int if it's a string or number
+    user_id = None
+    if user_id_raw is not None:
+        try:
+            if isinstance(user_id_raw, str):
+                # Remove any non-digit characters and convert
+                user_id = int(''.join(filter(str.isdigit, user_id_raw)))
+            elif isinstance(user_id_raw, (int, float)):
+                user_id = int(user_id_raw)
+            else:
+                user_id = None
+        except (ValueError, TypeError):
+            user_id = None
+            print(f"⚠️ Could not convert user_id '{user_id_raw}' to integer")
     
     async with async_session_maker() as session:
         if action in ["add", "create"]:
@@ -328,8 +608,13 @@ async def handle_user_management_nlp(
             if not user_id:
                 await message.answer(
                     "❌ Для додавання користувача потрібен user_id. "
-                    "Використовуйте: /adduser <user_id> <name> [color] "
-                    "або вкажіть user_id в повідомленні."
+                    "Використовуйте: /adduser &lt;user_id&gt; &lt;name&gt; [color] "
+                    "або вкажіть user_id в повідомленні.\n\n"
+                    f"<b>Розпізнано:</b>\n"
+                    f"• Дія: {action}\n"
+                    f"• Ім'я: {name or 'не вказано'}\n"
+                    f"• User ID: {user_id_raw or 'не вказано'}",
+                    parse_mode="HTML"
                 )
                 return
             
@@ -367,7 +652,14 @@ async def handle_user_management_nlp(
         elif action in ["edit", "update"]:
             # Edit existing user
             if not user_id:
-                await message.answer("❌ Не вдалося визначити user_id для редагування.")
+                await message.answer(
+                    "❌ Не вдалося визначити user_id для редагування.\n\n"
+                    f"<b>Розпізнано:</b>\n"
+                    f"• Дія: {action}\n"
+                    f"• Ім'я: {name or 'не вказано'}\n"
+                    f"• User ID: {user_id_raw or 'не вказано'}",
+                    parse_mode="HTML"
+                )
                 return
             
             from bot.database.operations import get_user
@@ -381,17 +673,29 @@ async def handle_user_management_nlp(
             if name:
                 updates["name"] = name
             if color:
+                print(f"🎨 Parsing color: '{color}'")
                 color_code = parse_color(color)
+                print(f"🎨 Parsed color result: {color_code}")
                 if color_code:
                     updates["color_code"] = color_code
+                else:
+                    print(f"⚠️ Failed to parse color '{color}' - color not updated")
+                    await message.answer(
+                        f"⚠️ Не вдалося розпізнати колір '{color}'. "
+                        f"Доступні кольори: жовтий, рожевий, голубий, фіолетовий, зелений, оранжевий, синій, або hex код (наприклад, #00CED1)."
+                    )
+                    return
             
             if updates:
+                print(f"📝 Updating user {user_id} with: {updates}")
                 await update_user(session, user_id, **updates)
                 updated_user = await get_user(session, user_id)
-                await message.answer(
-                    f"✅ Користувач {updated_user.name} (ID: {user_id}) оновлено.\n"
-                    + "\n".join([f"  {k}: {v}" for k, v in updates.items()])
-                )
+                response_lines = [f"✅ Користувач {updated_user.name} (ID: {user_id}) оновлено."]
+                if "name" in updates:
+                    response_lines.append(f"  Ім'я: {updates['name']}")
+                if "color_code" in updates:
+                    response_lines.append(f"  Колір: {updates['color_code']}")
+                await message.answer("\n".join(response_lines))
             else:
                 await message.answer("⚠️ Не вказано полів для оновлення.")
         

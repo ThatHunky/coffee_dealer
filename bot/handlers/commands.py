@@ -110,7 +110,7 @@ async def cmd_allow(message: Message):
     
     args = message.text.split()[1:] if message.text else []
     if not args:
-        await message.answer("❌ Використовуйте: /allow <user_id> або /allow @username")
+        await message.answer("❌ Використовуйте: /allow &lt;user_id&gt; або /allow @username")
         return
     
     identifier = args[0].strip()
@@ -128,7 +128,7 @@ async def cmd_allow(message: Message):
         try:
             user_id = int(identifier)
         except ValueError:
-            await message.answer("❌ Невірний формат. Використовуйте: /allow <user_id>")
+            await message.answer("❌ Невірний формат. Використовуйте: /allow &lt;user_id&gt;")
             return
     
     async with async_session_maker() as session:
@@ -150,7 +150,7 @@ async def cmd_adduser(message: Message):
     
     args = message.text.split()[1:] if message.text else []
     if len(args) < 2:
-        await message.answer("❌ Використовуйте: /adduser <user_id> <name> [color]")
+        await message.answer("❌ Використовуйте: /adduser &lt;user_id&gt; &lt;name&gt; [color]")
         return
     
     try:
@@ -203,7 +203,7 @@ async def cmd_setcolor(message: Message):
     
     args = message.text.split()[1:] if message.text else []
     if len(args) < 2:
-        await message.answer("❌ Використовуйте: /setcolor <user_id> <color>")
+        await message.answer("❌ Використовуйте: /setcolor &lt;user_id&gt; &lt;color&gt;")
         return
     
     try:
@@ -237,7 +237,7 @@ async def cmd_setname(message: Message):
     
     args = message.text.split()[1:] if message.text else []
     if len(args) < 2:
-        await message.answer("❌ Використовуйте: /setname <user_id> <name>")
+        await message.answer("❌ Використовуйте: /setname &lt;user_id&gt; &lt;name&gt;")
         return
     
     try:
@@ -314,7 +314,7 @@ async def cmd_hideuser(message: Message):
     
     args = message.text.split()[1:] if message.text else []
     if len(args) < 1:
-        await message.answer("❌ Використовуйте: /hideuser <user_id>")
+        await message.answer("❌ Використовуйте: /hideuser &lt;user_id&gt;")
         return
     
     try:
@@ -341,7 +341,7 @@ async def cmd_showuser(message: Message):
     
     args = message.text.split()[1:] if message.text else []
     if len(args) < 1:
-        await message.answer("❌ Використовуйте: /showuser <user_id>")
+        await message.answer("❌ Використовуйте: /showuser &lt;user_id&gt;")
         return
     
     try:
@@ -369,7 +369,7 @@ async def cmd_edituser(message: Message):
     args = message.text.split()[1:] if message.text else []
     if not args:
         await message.answer(
-            "❌ Використовуйте: /edituser <user_id> <зміни>\n"
+            "❌ Використовуйте: /edituser &lt;user_id&gt; &lt;зміни&gt;\n"
             "Або надішліть повідомлення природною мовою, наприклад:\n"
             "• \"Зміни ім'я користувача 123 на Дана\"\n"
             "• \"Встанови колір жовтий для користувача 456\""
