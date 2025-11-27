@@ -16,8 +16,10 @@ from bot.services.gemini import gemini_service
 from bot.services.notifications import notify_admins_of_request
 from bot.middleware.permissions import is_admin
 from bot.utils.colors import parse_color
+from bot.utils.logging_config import get_logger
 
 router = Router()
+logger = get_logger(__name__)
 
 
 @router.message(F.photo)
@@ -47,7 +49,10 @@ async def handle_image(message: Message):
     
     await message.answer("🔄 Аналізую зображення календаря...")
     
-    print(f"📸 Received image: {len(image_data)} bytes, file_id: {photo.file_id}")
+    logger.info(f"[IMAGE IMPORT] Received image from user {message.from_user.id}")
+    logger.info(f"[IMAGE IMPORT] Image details: {len(image_data)} bytes, file_id: {photo.file_id}")
+    logger.info(f"[IMAGE IMPORT] Photo sizes available: {[(p.width, p.height, p.file_size) for p in message.photo]}")
+    logger.info(f"[IMAGE IMPORT] Selected largest photo: {photo.width}x{photo.height}, {photo.file_size} bytes")
     
     # Get users for context
     async with async_session_maker() as session:
@@ -62,14 +67,16 @@ async def handle_image(message: Message):
             }
             for u in users
         ]
-        print(f"👥 Loaded {len(users_list)} users for context")
+        logger.info(f"[IMAGE IMPORT] Loaded {len(users_list)} users for context:")
+        for user in users_list:
+            logger.debug(f"[IMAGE IMPORT]   - {user['name']} (ID: {user['user_id']}, Color: {user.get('color_code', 'N/A')})")
     
     # Parse image with Gemini
-    print(f"🤖 Calling Gemini API to parse calendar image...")
+    logger.info(f"[IMAGE IMPORT] Calling Gemini API to parse calendar image...")
     parsed = await gemini_service.parse_calendar_image(image_data, users_list)
     
     if not parsed:
-        print("❌ Gemini parsing returned None")
+        logger.error("[IMAGE IMPORT] Gemini parsing returned None - check logs above for details")
         await message.answer(
             "❌ Не вдалося розпізнати календар на зображенні. "
             "Переконайтеся, що зображення містить календар з кольоровими днями.\n\n"
@@ -81,45 +88,92 @@ async def handle_image(message: Message):
     month = parsed.get("month")
     assignments = parsed.get("assignments", [])
     
-    print(f"📅 Parsed calendar: year={year}, month={month}, assignments={len(assignments)}")
+    print(f"📅 [IMAGE IMPORT] Parsed calendar data:")
+    print(f"📅 [IMAGE IMPORT]   - Year: {year}")
+    print(f"📅 [IMAGE IMPORT]   - Month: {month}")
+    print(f"📅 [IMAGE IMPORT]   - Assignments count: {len(assignments)}")
+    print(f"📅 [IMAGE IMPORT]   - Full parsed data: {parsed}")
     
     if not year or not month:
-        print(f"❌ Missing year or month: year={year}, month={month}")
+        print(f"❌ [IMAGE IMPORT] Missing year or month: year={year}, month={month}")
+        print(f"❌ [IMAGE IMPORT] Full parsed response: {parsed}")
         await message.answer("❌ Не вдалося визначити рік або місяць з зображення.")
         return
     
+    # Validate and correct year if it seems wrong
+    # If we're importing December and it's already November/December, it's likely next year
+    current_date = date.today()
+    current_year = current_date.year
+    current_month = current_date.month
+    
+    print(f"📅 [IMAGE IMPORT] Current date: {current_date} (year={current_year}, month={current_month})")
+    
+    # Special handling for December calendars imported in Nov/Dec - likely next year
+    if month == 12 and current_month >= 11:
+        expected_year = current_year + 1
+        if year <= current_year:  # If parsed year is current year or older
+            print(f"⚠️ [IMAGE IMPORT] Correcting December year from {year} to {expected_year} (importing in {current_year}-{current_month:02d})")
+            year = expected_year
+            # Fix all assignment dates
+            corrected_count = 0
+            for assignment in assignments:
+                date_str = assignment.get("date", "")
+                if date_str:
+                    try:
+                        parsed_date = datetime.strptime(date_str, "%Y-%m-%d")
+                        old_date = assignment["date"]
+                        assignment["date"] = f"{year}-{month:02d}-{parsed_date.day:02d}"
+                        if old_date != assignment["date"]:
+                            corrected_count += 1
+                            print(f"📅 [IMAGE IMPORT]   Corrected date: {old_date} -> {assignment['date']}")
+                    except ValueError as e:
+                        print(f"⚠️ [IMAGE IMPORT]   Failed to parse date {date_str}: {e}")
+            print(f"📅 [IMAGE IMPORT] Corrected {corrected_count} assignment dates")
+    
     if not assignments:
-        print(f"⚠️ No assignments found in parsed calendar")
+        print(f"⚠️ [IMAGE IMPORT] No assignments found in parsed calendar")
+        print(f"⚠️ [IMAGE IMPORT] Full parsed response: {parsed}")
         await message.answer(
             f"⚠️ Календарь розпізнано ({month}/{year}), але не знайдено призначень. "
             "Можливо, всі дні порожні або кольори не відповідають користувачам."
         )
         return
     
+    print(f"📋 [IMAGE IMPORT] Processing {len(assignments)} assignments...")
+    
     # Apply assignments to database
     executed = []
     failed = []
     async with async_session_maker() as session:
-        for assignment in assignments:
+        for idx, assignment in enumerate(assignments, 1):
             try:
+                print(f"📋 [IMAGE IMPORT] Processing assignment {idx}/{len(assignments)}: {assignment}")
                 date_str = assignment.get("date")
                 user_names = assignment.get("user_names", [])
                 user_ids = assignment.get("user_ids", [])
+                color = assignment.get("color")
+                
+                print(f"📋 [IMAGE IMPORT]   Date: {date_str}")
+                print(f"📋 [IMAGE IMPORT]   User names: {user_names}")
+                print(f"📋 [IMAGE IMPORT]   User IDs (from parsing): {user_ids}")
+                print(f"📋 [IMAGE IMPORT]   Color: {color}")
                 
                 if not date_str:
-                    print(f"⚠️ Assignment missing date: {assignment}")
+                    print(f"⚠️ [IMAGE IMPORT]   Assignment missing date: {assignment}")
                     failed.append(f"⚠️ Пропущено (немає дати): {assignment.get('user_names', ['Unknown'])}")
                     continue
                 
                 try:
                     shift_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+                    print(f"📋 [IMAGE IMPORT]   Parsed date: {shift_date}")
                 except ValueError as date_error:
-                    print(f"❌ Invalid date format '{date_str}': {date_error}")
+                    print(f"❌ [IMAGE IMPORT]   Invalid date format '{date_str}': {date_error}")
                     failed.append(f"❌ Невірна дата: {date_str}")
                     continue
                 
                 # Match user names to user IDs if IDs not provided
                 if not user_ids and user_names:
+                    print(f"📋 [IMAGE IMPORT]   Matching user names to IDs...")
                     matched_ids = []
                     for name in user_names:
                         matched = False
@@ -127,22 +181,25 @@ async def handle_image(message: Message):
                             if user.name == name or user.name.lower() == name.lower():
                                 matched_ids.append(user.user_id)
                                 matched = True
+                                print(f"📋 [IMAGE IMPORT]     Matched '{name}' -> ID {user.user_id}")
                                 break
                         if not matched:
-                            print(f"⚠️ User name '{name}' not found in users list")
+                            print(f"⚠️ [IMAGE IMPORT]     User name '{name}' not found in users list")
                     user_ids = matched_ids
+                    print(f"📋 [IMAGE IMPORT]   Matched user IDs: {user_ids}")
                 
                 if user_ids:
+                    print(f"📋 [IMAGE IMPORT]   Creating/updating shift for {shift_date} with user IDs: {user_ids}")
                     await create_or_update_shift(session, shift_date, user_ids)
                     executed.append(f"✅ {date_str}: {', '.join(user_names)}")
-                    print(f"✅ Imported shift for {date_str}: {user_names}")
+                    print(f"✅ [IMAGE IMPORT]   Successfully imported shift for {date_str}: {user_names} (IDs: {user_ids})")
                 else:
-                    print(f"⚠️ No user IDs matched for {date_str}: {user_names}")
+                    print(f"⚠️ [IMAGE IMPORT]   No user IDs matched for {date_str}: {user_names}")
                     failed.append(f"⚠️ {date_str}: не знайдено користувачів ({', '.join(user_names)})")
             except Exception as e:
                 import traceback
-                print(f"❌ Error processing assignment {assignment}: {e}")
-                print(f"❌ Traceback: {traceback.format_exc()}")
+                print(f"❌ [IMAGE IMPORT]   Error processing assignment {assignment}: {e}")
+                print(f"❌ [IMAGE IMPORT]   Traceback: {traceback.format_exc()}")
                 failed.append(f"❌ Помилка для {assignment.get('date', 'unknown')}: {str(e)}")
     
     if executed:
@@ -407,7 +464,10 @@ async def handle_admin_nlp_command(
             {
                 "date": s.date.isoformat(),
                 "user_ids": s.user_ids,
-                "user_names": [users_dict.get(uid, {}).get("name", f"User {uid}") for uid in s.user_ids]
+                "user_names": [
+                    users_dict[uid].name if uid in users_dict else f"User {uid}"
+                    for uid in s.user_ids
+                ]
             }
             for s in shifts
         ]
@@ -604,19 +664,10 @@ async def handle_user_management_nlp(
                 await message.answer("❌ Не вдалося визначити ім'я користувача.")
                 return
             
-            # If user_id not provided, we need to ask for it or generate a temporary one
+            # If user_id not provided, generate a negative placeholder ID
+            from bot.database.operations import get_next_negative_user_id
             if not user_id:
-                await message.answer(
-                    "❌ Для додавання користувача потрібен user_id. "
-                    "Використовуйте: /adduser &lt;user_id&gt; &lt;name&gt; [color] "
-                    "або вкажіть user_id в повідомленні.\n\n"
-                    f"<b>Розпізнано:</b>\n"
-                    f"• Дія: {action}\n"
-                    f"• Ім'я: {name or 'не вказано'}\n"
-                    f"• User ID: {user_id_raw or 'не вказано'}",
-                    parse_mode="HTML"
-                )
-                return
+                user_id = await get_next_negative_user_id(session)
             
             # Check if user exists
             from bot.database.operations import get_user
@@ -644,8 +695,9 @@ async def handle_user_management_nlp(
                 color_code=color_code
             )
             
+            id_note = f" (автоматично згенерований ID: {user_id})" if user_id < 0 else f" (ID: {user_id})"
             await message.answer(
-                f"✅ Користувач {user.name} (ID: {user_id}) доданий.\n"
+                f"✅ Користувач {user.name}{id_note} доданий.\n"
                 f"Колір: {color_code}"
             )
         

@@ -224,9 +224,12 @@ async def build_calendar_keyboard(
     # Get first weekday of month (0=Monday, 6=Sunday)
     first_weekday = first_day.weekday()  # 0=Monday
 
+    # Collect all calendar buttons (empty cells + day buttons) for proper row alignment
+    calendar_buttons = []
+
     # Add empty cells for days before month starts
     for _ in range(first_weekday):
-        builder.button(text=" ", callback_data="ignore")
+        calendar_buttons.append(InlineKeyboardButton(text=" ", callback_data="ignore"))
 
     # Add day buttons
     today = date.today()
@@ -252,12 +255,18 @@ async def build_calendar_keyboard(
         else:
             emoji = "⚪"
 
-        # Format button text
-        button_text = f"{day} {emoji}"
+        # Format button text with padding for single-digit days (for consistent width)
+        if day < 10:
+            button_text = f" {day} {emoji}"
+        else:
+            button_text = f"{day} {emoji}"
 
         # Highlight today
         if current_date == today and not is_history:
-            button_text = f"📍 {day}"
+            if day < 10:
+                button_text = f"📍  {day}"  # Extra space for padding
+            else:
+                button_text = f"📍 {day}"
 
         # Callback data
         if is_history:
@@ -265,13 +274,20 @@ async def build_calendar_keyboard(
         else:
             callback_data = f"day_{year}_{month:02d}_{day:02d}"
 
-        builder.button(text=button_text, callback_data=callback_data)
+        calendar_buttons.append(
+            InlineKeyboardButton(text=button_text, callback_data=callback_data)
+        )
 
     # Add empty cells to complete last row if needed
     last_weekday = last_day.weekday()
     remaining_cells = 6 - last_weekday
     for _ in range(remaining_cells):
-        builder.button(text=" ", callback_data="ignore")
+        calendar_buttons.append(InlineKeyboardButton(text=" ", callback_data="ignore"))
+
+    # Build rows of exactly 7 buttons each for proper alignment
+    for i in range(0, len(calendar_buttons), 7):
+        row_buttons = calendar_buttons[i : i + 7]
+        builder.row(*row_buttons)
 
     # Navigation buttons
     nav_buttons = []

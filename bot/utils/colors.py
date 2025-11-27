@@ -98,7 +98,7 @@ def get_combined_color_emoji(hex_colors: List[str]) -> str:
     
     # For multiple colors, combine emojis
     emojis = [get_color_emoji(c) for c in hex_colors if c]
-    return "".join(emojis[:3])  # Limit to 3 emojis max
+    return "".join(emojis[:2])  # Limit to 2 emojis max to prevent button text cutoff
 
 
 def get_default_colors() -> List[str]:

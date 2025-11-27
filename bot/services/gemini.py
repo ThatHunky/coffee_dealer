@@ -7,8 +7,11 @@ from typing import Optional, Dict, Any, List
 from google.genai import Client
 from google.genai import types as genai_types
 from dotenv import load_dotenv
+from bot.utils.logging_config import get_logger
 
 load_dotenv()
+
+logger = get_logger(__name__)
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 # Dynamic thinking budget: -1 for dynamic, or specific number for fixed budget
@@ -655,7 +658,7 @@ Only return actions with confidence > 0.7.
         
         # Detect image format
         mime_type = self._detect_image_format(image_data)
-        print(f"📸 Detected image format: {mime_type}, size: {len(image_data)} bytes")
+        logger.debug(f"[GEMINI] Detected image format: {mime_type}, size: {len(image_data)} bytes")
 
         # Build user context with color mappings
         users_context = "\n".join(
@@ -681,10 +684,13 @@ Extract the following information:
 1. Year and month - READ THE CALENDAR HEADER CAREFULLY. Do NOT guess or assume. Look for:
    - Month names in Ukrainian (січень, лютий, березень, квітень, травень, червень, липень, серпень, вересень, жовтень, листопад, грудень)
    - Month names in English (January, February, March, April, May, June, July, August, September, October, November, December)
-   - Year number (e.g., 2025, 2024)
+   - Year number (e.g., 2025, 2024) - READ THE NUMBER EXACTLY AS IT APPEARS IN THE CALENDAR HEADER
+   - If you see "Грудень 2025" or "December 2025", the year is 2025
+   - If you see "Грудень 2024" or "December 2024", the year is 2024
+   - DO NOT use the current year as a default - use ONLY what you see in the image
    - If the calendar shows "листопад" or "November", the month is 11, NOT 7
    - If the calendar shows "липень" or "July", the month is 7
-   - Be VERY careful to match the month name you see in the image
+   - Be VERY careful to match the month name and year number you see in the image
 
 2. For each day with a colored assignment, extract:
    - Date (YYYY-MM-DD format) - use the EXACT month/year from the calendar header
@@ -732,6 +738,9 @@ Important:
                 config = genai_types.GenerateContentConfig(
                     thinking_config=thinking_config
                 )
+                print(f"🤖 [GEMINI] Using thinking config: {thinking_config}")
+            else:
+                print(f"🤖 [GEMINI] No thinking config (complexity: {complexity})")
 
             # Send image to Gemini
             # Create image part using inline data with detected format
@@ -739,199 +748,274 @@ Important:
                 inline_data=genai_types.Blob(data=image_data, mimeType=mime_type)
             )
 
-            print(f"🤖 Sending image to Gemini API (model: {self.model_name})...")
+            print(f"🤖 [GEMINI] Sending image to Gemini API")
+            print(f"🤖 [GEMINI]   Model: {self.model_name}")
+            print(f"🤖 [GEMINI]   Image format: {mime_type}")
+            print(f"🤖 [GEMINI]   Image size: {len(image_data)} bytes")
+            print(f"🤖 [GEMINI]   Available users: {len(available_users)}")
+            print(f"🤖 [GEMINI]   Prompt length: {len(prompt)} characters")
+            
             response = self.client.models.generate_content(
                 model=f"models/{self.model_name}",
                 contents=[prompt, image_part],
                 config=config,
             )
+            
+            print(f"🤖 [GEMINI] Received response from API")
+            print(f"🤖 [GEMINI]   Response type: {type(response)}")
 
             # Extract text from response
             text = None
             if hasattr(response, "text"):
                 text = response.text.strip()
-                print(f"✅ Got response text (length: {len(text)})")
+                print(f"✅ [GEMINI] Got response text (length: {len(text)})")
             elif hasattr(response, "candidates") and response.candidates:
+                print(f"📋 [GEMINI] Response has {len(response.candidates)} candidates")
                 if response.candidates[0].content and response.candidates[0].content.parts:
                     text = response.candidates[0].content.parts[0].text.strip()
-                    print(f"✅ Got response from candidates (length: {len(text)})")
+                    print(f"✅ [GEMINI] Got response from candidates (length: {len(text)})")
+                    print(f"📋 [GEMINI] Candidate structure: content={type(response.candidates[0].content)}, parts={len(response.candidates[0].content.parts)}")
                 else:
-                    print(f"⚠️ Response candidates exist but no content parts found")
-                    print(f"Response structure: {type(response.candidates[0])}")
+                    print(f"⚠️ [GEMINI] Response candidates exist but no content parts found")
+                    print(f"⚠️ [GEMINI] Candidate structure: {type(response.candidates[0])}")
+                    print(f"⚠️ [GEMINI] Candidate attributes: {dir(response.candidates[0])}")
+                    if hasattr(response.candidates[0], 'content'):
+                        print(f"⚠️ [GEMINI] Candidate content: {response.candidates[0].content}")
             else:
                 text = str(response).strip()
-                print(f"⚠️ Using string representation of response (length: {len(text)})")
+                print(f"⚠️ [GEMINI] Using string representation of response (length: {len(text)})")
+                print(f"⚠️ [GEMINI] Response attributes: {[a for a in dir(response) if not a.startswith('_')]}")
             
             if not text:
-                print("❌ No text content in Gemini response")
-                print(f"Response type: {type(response)}")
-                print(f"Response attributes: {dir(response)}")
+                print("❌ [GEMINI] No text content in Gemini response")
+                print(f"❌ [GEMINI] Response type: {type(response)}")
+                print(f"❌ [GEMINI] Response attributes: {[a for a in dir(response) if not a.startswith('_')]}")
+                if hasattr(response, 'candidates'):
+                    print(f"❌ [GEMINI] Candidates: {response.candidates}")
                 return None
+
+            # Log full response text for debugging
+            print(f"📝 [GEMINI] Full response text (length: {len(text)}):")
+            print(f"📝 [GEMINI] {text}")
 
             # Remove markdown code blocks if present
             original_text = text
             if text.startswith("```"):
+                print(f"📝 [GEMINI] Detected markdown code blocks, removing...")
                 text = text.split("```")[1]
                 if text.startswith("json"):
                     text = text[4:]
                 text = text.strip()
-
-            # Log first 200 chars of response for debugging
-            preview = text[:200] if len(text) > 200 else text
-            print(f"📝 Response preview: {preview}...")
+                print(f"📝 [GEMINI] After removing markdown, length: {len(text)}")
 
             try:
                 parsed = json.loads(text)
-                print(f"✅ Successfully parsed JSON response")
+                print(f"✅ [GEMINI] Successfully parsed JSON response")
+                print(f"📋 [GEMINI] Parsed JSON keys: {list(parsed.keys())}")
                 
                 # Validate response structure
                 if not isinstance(parsed, dict):
-                    print(f"❌ Parsed response is not a dict: {type(parsed)}")
+                    print(f"❌ [GEMINI] Parsed response is not a dict: {type(parsed)}")
+                    print(f"❌ [GEMINI] Parsed value: {parsed}")
                     return None
                 
                 if "year" not in parsed or "month" not in parsed:
-                    print(f"❌ Missing year or month in response: {parsed.keys()}")
+                    print(f"❌ [GEMINI] Missing year or month in response")
+                    print(f"❌ [GEMINI] Available keys: {list(parsed.keys())}")
+                    print(f"❌ [GEMINI] Full parsed response: {parsed}")
                     return None
                 
                 # Validate month is reasonable (1-12)
                 month = parsed.get("month")
+                print(f"📋 [GEMINI] Extracted month: {month} (type: {type(month)})")
                 if not isinstance(month, int) or month < 1 or month > 12:
-                    print(f"❌ Invalid month value: {month} (must be 1-12)")
+                    print(f"❌ [GEMINI] Invalid month value: {month} (must be 1-12)")
                     return None
                 
                 # Validate year is reasonable (2020-2030)
                 year = parsed.get("year")
+                print(f"📋 [GEMINI] Extracted year: {year} (type: {type(year)})")
                 if not isinstance(year, int) or year < 2020 or year > 2030:
-                    print(f"❌ Invalid year value: {year} (must be 2020-2030)")
+                    print(f"❌ [GEMINI] Invalid year value: {year} (must be 2020-2030)")
                     return None
                 
                 if "assignments" not in parsed:
-                    print(f"⚠️ No assignments in response, using empty list")
+                    print(f"⚠️ [GEMINI] No assignments in response, using empty list")
                     parsed["assignments"] = []
+                else:
+                    print(f"📋 [GEMINI] Found {len(parsed['assignments'])} assignments")
                 
                 # Validate all assignment dates match the extracted month/year
-                for assignment in parsed.get("assignments", []):
+                date_corrections = 0
+                for idx, assignment in enumerate(parsed.get("assignments", []), 1):
+                    print(f"📋 [GEMINI] Validating assignment {idx}: {assignment}")
                     date_str = assignment.get("date", "")
                     if date_str:
                         try:
                             from datetime import datetime
                             parsed_date = datetime.strptime(date_str, "%Y-%m-%d")
                             if parsed_date.year != year or parsed_date.month != month:
-                                print(f"⚠️ Assignment date {date_str} doesn't match calendar month/year ({year}-{month:02d})")
+                                print(f"⚠️ [GEMINI]   Assignment date {date_str} doesn't match calendar month/year ({year}-{month:02d})")
                                 # Fix the date to match the calendar month/year
+                                old_date = assignment["date"]
                                 assignment["date"] = f"{year}-{month:02d}-{parsed_date.day:02d}"
-                                print(f"✅ Fixed date to: {assignment['date']}")
-                        except ValueError:
-                            print(f"⚠️ Invalid date format in assignment: {date_str}")
+                                date_corrections += 1
+                                print(f"✅ [GEMINI]   Fixed date: {old_date} -> {assignment['date']}")
+                        except ValueError as e:
+                            print(f"⚠️ [GEMINI]   Invalid date format in assignment: {date_str} (error: {e})")
+                    else:
+                        print(f"⚠️ [GEMINI]   Assignment {idx} missing date field")
                 
-                print(f"✅ Validated response: year={year}, month={month}, assignments={len(parsed.get('assignments', []))}")
+                if date_corrections > 0:
+                    print(f"📋 [GEMINI] Corrected {date_corrections} assignment dates")
+                
+                print(f"✅ [GEMINI] Validated response: year={year}, month={month}, assignments={len(parsed.get('assignments', []))}")
                 return parsed
             except json.JSONDecodeError as json_error:
-                print(f"❌ JSON parsing error: {json_error}")
-                print(f"❌ Text that failed to parse: {text[:500]}")
+                print(f"❌ [GEMINI] JSON parsing error: {json_error}")
+                print(f"❌ [GEMINI] Error at position: {json_error.pos if hasattr(json_error, 'pos') else 'unknown'}")
+                print(f"❌ [GEMINI] Text that failed to parse (first 1000 chars):")
+                print(f"❌ [GEMINI] {text[:1000]}")
+                if len(text) > 1000:
+                    print(f"❌ [GEMINI] ... (truncated, total length: {len(text)})")
                 return None
         except Exception as e:
             import traceback
             error_traceback = traceback.format_exc()
-            print(f"❌ Error parsing calendar image: {e}")
-            print(f"❌ Full traceback:\n{error_traceback}")
+            print(f"❌ [GEMINI] Error parsing calendar image: {e}")
+            print(f"❌ [GEMINI] Error type: {type(e).__name__}")
+            print(f"❌ [GEMINI] Full traceback:\n{error_traceback}")
             
             # If thinking config fails, retry without it
             if config and "thinking" in str(e).lower():
-                print(f"🔄 Thinking config failed, retrying without thinking config...")
+                print(f"🔄 [GEMINI] Thinking config failed, retrying without thinking config...")
                 try:
                     image_part = genai_types.Part(
                         inline_data=genai_types.Blob(
                             data=image_data, mimeType=mime_type
                         )
                     )
-                    print(f"🤖 Retrying Gemini API call without thinking config...")
+                    print(f"🤖 [GEMINI RETRY] Retrying Gemini API call without thinking config...")
+                    print(f"🤖 [GEMINI RETRY]   Model: {self.model_name}")
+                    print(f"🤖 [GEMINI RETRY]   Image format: {mime_type}")
+                    print(f"🤖 [GEMINI RETRY]   Image size: {len(image_data)} bytes")
+                    
                     response = self.client.models.generate_content(
                         model=f"models/{self.model_name}",
                         contents=[prompt, image_part],
                         config=None,
                     )
                     
+                    print(f"🤖 [GEMINI RETRY] Received response from API")
+                    print(f"🤖 [GEMINI RETRY]   Response type: {type(response)}")
+                    
                     # Extract text from response
                     text = None
                     if hasattr(response, "text"):
                         text = response.text.strip()
-                        print(f"✅ Got response text on retry (length: {len(text)})")
+                        print(f"✅ [GEMINI RETRY] Got response text (length: {len(text)})")
                     elif hasattr(response, "candidates") and response.candidates:
+                        print(f"📋 [GEMINI RETRY] Response has {len(response.candidates)} candidates")
                         if response.candidates[0].content and response.candidates[0].content.parts:
                             text = response.candidates[0].content.parts[0].text.strip()
-                            print(f"✅ Got response from candidates on retry (length: {len(text)})")
+                            print(f"✅ [GEMINI RETRY] Got response from candidates (length: {len(text)})")
+                        else:
+                            print(f"⚠️ [GEMINI RETRY] Candidates exist but no content parts")
                     else:
                         text = str(response).strip()
-                        print(f"⚠️ Using string representation on retry (length: {len(text)})")
+                        print(f"⚠️ [GEMINI RETRY] Using string representation (length: {len(text)})")
                     
                     if not text:
-                        print("❌ No text content in Gemini response (retry)")
+                        print("❌ [GEMINI RETRY] No text content in Gemini response")
                         return None
+
+                    # Log full response text
+                    print(f"📝 [GEMINI RETRY] Full response text (length: {len(text)}):")
+                    print(f"📝 [GEMINI RETRY] {text}")
 
                     # Remove markdown code blocks if present
                     if text.startswith("```"):
+                        print(f"📝 [GEMINI RETRY] Detected markdown code blocks, removing...")
                         text = text.split("```")[1]
                         if text.startswith("json"):
                             text = text[4:]
                         text = text.strip()
-
-                    # Log preview
-                    preview = text[:200] if len(text) > 200 else text
-                    print(f"📝 Retry response preview: {preview}...")
+                        print(f"📝 [GEMINI RETRY] After removing markdown, length: {len(text)}")
 
                     try:
                         parsed = json.loads(text)
-                        print(f"✅ Successfully parsed JSON response on retry")
+                        print(f"✅ [GEMINI RETRY] Successfully parsed JSON response")
+                        print(f"📋 [GEMINI RETRY] Parsed JSON keys: {list(parsed.keys())}")
                         
                         # Validate response structure
                         if not isinstance(parsed, dict):
-                            print(f"❌ Parsed response is not a dict: {type(parsed)}")
+                            print(f"❌ [GEMINI RETRY] Parsed response is not a dict: {type(parsed)}")
+                            print(f"❌ [GEMINI RETRY] Parsed value: {parsed}")
                             return None
                         
                         if "year" not in parsed or "month" not in parsed:
-                            print(f"❌ Missing year or month in response: {parsed.keys()}")
+                            print(f"❌ [GEMINI RETRY] Missing year or month in response")
+                            print(f"❌ [GEMINI RETRY] Available keys: {list(parsed.keys())}")
+                            print(f"❌ [GEMINI RETRY] Full parsed response: {parsed}")
                             return None
                         
                         # Validate month is reasonable (1-12)
                         month = parsed.get("month")
+                        print(f"📋 [GEMINI RETRY] Extracted month: {month} (type: {type(month)})")
                         if not isinstance(month, int) or month < 1 or month > 12:
-                            print(f"❌ Invalid month value: {month} (must be 1-12)")
+                            print(f"❌ [GEMINI RETRY] Invalid month value: {month} (must be 1-12)")
                             return None
                         
                         # Validate year is reasonable (2020-2030)
                         year = parsed.get("year")
+                        print(f"📋 [GEMINI RETRY] Extracted year: {year} (type: {type(year)})")
                         if not isinstance(year, int) or year < 2020 or year > 2030:
-                            print(f"❌ Invalid year value: {year} (must be 2020-2030)")
+                            print(f"❌ [GEMINI RETRY] Invalid year value: {year} (must be 2020-2030)")
                             return None
                         
                         if "assignments" not in parsed:
+                            print(f"⚠️ [GEMINI RETRY] No assignments in response, using empty list")
                             parsed["assignments"] = []
+                        else:
+                            print(f"📋 [GEMINI RETRY] Found {len(parsed['assignments'])} assignments")
                         
                         # Validate all assignment dates match the extracted month/year
-                        for assignment in parsed.get("assignments", []):
+                        date_corrections = 0
+                        for idx, assignment in enumerate(parsed.get("assignments", []), 1):
+                            print(f"📋 [GEMINI RETRY] Validating assignment {idx}: {assignment}")
                             date_str = assignment.get("date", "")
                             if date_str:
                                 try:
                                     parsed_date = datetime.strptime(date_str, "%Y-%m-%d")
                                     if parsed_date.year != year or parsed_date.month != month:
-                                        print(f"⚠️ Assignment date {date_str} doesn't match calendar month/year ({year}-{month:02d})")
-                                        # Fix the date to match the calendar month/year
+                                        print(f"⚠️ [GEMINI RETRY]   Assignment date {date_str} doesn't match calendar month/year ({year}-{month:02d})")
+                                        old_date = assignment["date"]
                                         assignment["date"] = f"{year}-{month:02d}-{parsed_date.day:02d}"
-                                        print(f"✅ Fixed date to: {assignment['date']}")
-                                except ValueError:
-                                    print(f"⚠️ Invalid date format in assignment: {date_str}")
+                                        date_corrections += 1
+                                        print(f"✅ [GEMINI RETRY]   Fixed date: {old_date} -> {assignment['date']}")
+                                except ValueError as e:
+                                    print(f"⚠️ [GEMINI RETRY]   Invalid date format in assignment: {date_str} (error: {e})")
+                            else:
+                                print(f"⚠️ [GEMINI RETRY]   Assignment {idx} missing date field")
                         
-                        print(f"✅ Validated retry response: year={year}, month={month}, assignments={len(parsed.get('assignments', []))}")
+                        if date_corrections > 0:
+                            print(f"📋 [GEMINI RETRY] Corrected {date_corrections} assignment dates")
+                        
+                        print(f"✅ [GEMINI RETRY] Validated response: year={year}, month={month}, assignments={len(parsed.get('assignments', []))}")
                         return parsed
                     except json.JSONDecodeError as json_error:
-                        print(f"❌ JSON parsing error on retry: {json_error}")
-                        print(f"❌ Text that failed to parse: {text[:500]}")
+                        print(f"❌ [GEMINI RETRY] JSON parsing error: {json_error}")
+                        print(f"❌ [GEMINI RETRY] Error at position: {json_error.pos if hasattr(json_error, 'pos') else 'unknown'}")
+                        print(f"❌ [GEMINI RETRY] Text that failed to parse (first 1000 chars):")
+                        print(f"❌ [GEMINI RETRY] {text[:1000]}")
+                        if len(text) > 1000:
+                            print(f"❌ [GEMINI RETRY] ... (truncated, total length: {len(text)})")
                         return None
                 except Exception as retry_error:
                     retry_traceback = traceback.format_exc()
-                    print(f"❌ Error parsing calendar image (retry failed): {retry_error}")
-                    print(f"❌ Retry traceback:\n{retry_traceback}")
+                    print(f"❌ [GEMINI RETRY] Error parsing calendar image (retry failed): {retry_error}")
+                    print(f"❌ [GEMINI RETRY] Error type: {type(retry_error).__name__}")
+                    print(f"❌ [GEMINI RETRY] Retry traceback:\n{retry_traceback}")
                     return None
             else:
                 return None

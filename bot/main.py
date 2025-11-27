@@ -10,10 +10,16 @@ from aiogram.types import BotCommand
 from dotenv import load_dotenv
 
 from bot.database.models import init_db
+from bot.database.operations import cleanup_old_shifts, async_session_maker
 from bot.middleware.permissions import PermissionMiddleware, is_admin
 from bot.handlers import commands, callbacks, messages
+from bot.utils.logging_config import setup_logging, get_logger
 
 load_dotenv()
+
+# Set up logging first
+setup_logging()
+logger = get_logger(__name__)
 
 
 async def setup_bot_commands(bot: Bot):
@@ -39,7 +45,8 @@ async def setup_bot_commands(bot: Bot):
 
     # Set commands (admin commands are visible but protected by middleware)
     await bot.set_my_commands(commands_list)
-    print(f"✅ Registered {len(commands_list)} bot commands")
+    logger = get_logger(__name__)
+    logger.info(f"✅ Registered {len(commands_list)} bot commands")
 
 
 async def main():
@@ -47,18 +54,27 @@ async def main():
     # Get bot token
     bot_token = os.getenv("BOT_TOKEN")
     if not bot_token:
-        print("❌ BOT_TOKEN not found in environment variables!")
-        print("Please create a .env file with BOT_TOKEN=your_token")
+        logger.error("BOT_TOKEN not found in environment variables!")
+        logger.error("Please create a .env file with BOT_TOKEN=your_token")
         sys.exit(1)
 
     # Initialize database
-    print("📦 Initializing database...")
+    logger.info("📦 Initializing database...")
     try:
         await init_db()
-        print("✅ Database initialized")
+        logger.info("✅ Database initialized")
+        
+        # Clean up old calendar shifts (keep max 1 year)
+        logger.info("🧹 Cleaning up old calendar shifts (keeping last 1 year)...")
+        async with async_session_maker() as session:
+            deleted_count = await cleanup_old_shifts(session, max_age_years=1)
+            if deleted_count > 0:
+                logger.info(f"✅ Deleted {deleted_count} old shift(s) older than 1 year")
+            else:
+                logger.debug("No old shifts to clean up")
     except Exception as e:
-        print(f"❌ Database initialization error: {e}")
-        print(
+        logger.error(f"❌ Database initialization error: {e}")
+        logger.error(
             "Make sure DATABASE_URL is correct (defaults to SQLite: sqlite+aiosqlite:///shiftbot.db)"
         )
         sys.exit(1)
@@ -82,32 +98,29 @@ async def main():
     # Get bot info
     try:
         bot_info = await bot.get_me()
-        print(f"✅ Bot connected: @{bot_info.username} ({bot_info.first_name})")
+        logger.info(f"✅ Bot connected: @{bot_info.username} ({bot_info.first_name})")
     except Exception as e:
-        print(f"⚠️ Could not get bot info: {e}")
+        logger.warning(f"⚠️ Could not get bot info: {e}")
 
     # Start polling
-    print("🤖 Starting bot polling...")
-    print("📡 Bot is now running and listening for messages...")
-    print("💡 Press Ctrl+C to stop the bot\n")
+    logger.info("🤖 Starting bot polling...")
+    logger.info("📡 Bot is now running and listening for messages...")
+    logger.info("💡 Press Ctrl+C to stop the bot")
     try:
         await dp.start_polling(bot, skip_updates=True)
     except KeyboardInterrupt:
-        print("\n⚠️ Received interrupt signal")
+        logger.warning("\n⚠️ Received interrupt signal")
     except Exception as e:
-        print(f"❌ Error during polling: {e}")
-        import traceback
-
-        traceback.print_exc()
+        logger.error(f"❌ Error during polling: {e}", exc_info=True)
         sys.exit(1)
     finally:
-        print("🛑 Stopping bot...")
+        logger.info("🛑 Stopping bot...")
         await bot.session.close()
-        print("✅ Bot stopped successfully")
+        logger.info("✅ Bot stopped successfully")
 
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\n👋 Bot stopped by user")
+        logger.info("\n👋 Bot stopped by user")

@@ -149,20 +149,52 @@ async def cmd_adduser(message: Message):
         return
     
     args = message.text.split()[1:] if message.text else []
-    if len(args) < 2:
-        await message.answer("❌ Використовуйте: /adduser &lt;user_id&gt; &lt;name&gt; [color]")
+    if len(args) < 1:
+        await message.answer("❌ Використовуйте: /adduser &lt;name&gt; [user_id] [color]\n"
+                           "або: /adduser &lt;user_id&gt; &lt;name&gt; [color]\n\n"
+                           "Якщо user_id не вказано, буде згенеровано автоматично.")
         return
     
+    # Parse arguments - support both formats:
+    # /adduser name [user_id] [color]  OR  /adduser user_id name [color]
+    name = None
+    user_id = None
+    color = None
+    
+    # Try to parse first argument as user_id (if it's numeric)
     try:
-        user_id = int(args[0])
+        potential_id = int(args[0])
+        # If first arg is numeric and we have at least 2 args, treat it as: user_id name [color]
+        if len(args) >= 2:
+            user_id = potential_id
+            name = args[1]
+            color = args[2] if len(args) > 2 else None
+        else:
+            # Only one numeric arg - treat as name
+            name = args[0]
+            color = args[1] if len(args) > 1 else None
     except ValueError:
-        await message.answer("❌ Невірний user_id.")
-        return
+        # First arg is not numeric - treat as: name [user_id] [color]
+        name = args[0]
+        if len(args) > 1:
+            try:
+                user_id = int(args[1])
+                color = args[2] if len(args) > 2 else None
+            except ValueError:
+                # Second arg is not numeric either - treat as color
+                color = args[1]
     
-    name = args[1]
-    color = args[2] if len(args) > 2 else None
+    if not name:
+        await message.answer("❌ Не вказано ім'я користувача.")
+        return
     
     async with async_session_maker() as session:
+        from bot.database.operations import get_next_negative_user_id
+        
+        # Generate negative user_id if not provided
+        if user_id is None:
+            user_id = await get_next_negative_user_id(session)
+        
         existing_user = await get_user(session, user_id)
         if existing_user:
             await message.answer(f"❌ Користувач з ID {user_id} вже існує.")
@@ -188,8 +220,9 @@ async def cmd_adduser(message: Message):
             color_code=color_code
         )
         
+        id_note = f" (автоматично згенерований ID: {user_id})" if user_id < 0 else f" (ID: {user_id})"
         await message.answer(
-            f"✅ Користувач {user.name} (ID: {user_id}) доданий.\n"
+            f"✅ Користувач {user.name}{id_note} доданий.\n"
             f"Колір: {color_code or 'не встановлено'}"
         )
 

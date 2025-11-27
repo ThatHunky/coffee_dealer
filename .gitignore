@@ -42,6 +42,7 @@ ENV/
 *.sqlite3
 
 # Logs
+logs/
 *.log
 
 # OS
