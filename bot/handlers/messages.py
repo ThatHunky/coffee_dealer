@@ -31,9 +31,7 @@ async def handle_image(message: Message):
     
     # Download image
     file = await message.bot.get_file(photo.file_id)
-    image_data = b""
-    async for chunk in message.bot.download_file(file.file_path):
-        image_data += chunk
+    image_data = await message.bot.download_file(file.file_path)
     
     await message.answer("🔄 Аналізую зображення календаря...")
     
