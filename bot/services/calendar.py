@@ -260,11 +260,331 @@ def hex_to_rgb(hex_color: str) -> Tuple[int, int, int]:
     return tuple(int(hex_color[i : i + 2], 16) for i in (0, 2, 4))
 
 
+def get_seasonal_gradient(month: int) -> List[Tuple[int, int, int]]:
+    """
+    Generate seasonal gradient colors based on month.
+    
+    Args:
+        month: Month (1-12)
+    
+    Returns:
+        List of RGB tuples for gradient stops
+    """
+    # Winter (Dec-Feb): Cool blues and purples
+    if month in [12, 1, 2]:
+        return [
+            (30, 40, 80),   # Deep blue
+            (50, 60, 120),  # Medium blue
+            (80, 70, 140),  # Purple-blue
+            (100, 90, 160), # Light purple
+        ]
+    # Spring (Mar-May): Fresh greens and pastels
+    elif month in [3, 4, 5]:
+        return [
+            (60, 100, 80),   # Deep green
+            (80, 140, 100),  # Medium green
+            (120, 180, 140), # Light green
+            (160, 200, 180), # Pastel green
+        ]
+    # Summer (Jun-Aug): Warm oranges and yellows
+    elif month in [6, 7, 8]:
+        return [
+            (180, 100, 40),  # Deep orange
+            (220, 140, 60),  # Medium orange
+            (240, 180, 100), # Light orange
+            (255, 220, 150), # Warm yellow
+        ]
+    # Autumn (Sep-Nov): Rich oranges, reds, and browns
+    else:  # 9, 10, 11
+        return [
+            (120, 60, 40),   # Deep brown
+            (160, 80, 50),   # Medium brown
+            (200, 120, 70),  # Orange-brown
+            (220, 160, 100), # Light orange
+        ]
+
+
+def create_gradient_background(
+    width: int, height: int, colors: List[Tuple[int, int, int]]
+) -> Image.Image:
+    """
+    Create a smooth gradient background.
+    
+    Args:
+        width: Image width
+        height: Image height
+        colors: List of RGB color tuples for gradient stops
+    
+    Returns:
+        PIL Image with gradient background
+    """
+    # Create base image
+    img = Image.new("RGB", (width, height))
+    pixels = img.load()
+    
+    # Create gradient from top to bottom
+    num_stops = len(colors)
+    for y in range(height):
+        # Calculate which gradient segment we're in
+        segment = (y / height) * (num_stops - 1)
+        segment_idx = int(segment)
+        segment_frac = segment - segment_idx
+        
+        # Handle edge case
+        if segment_idx >= num_stops - 1:
+            r, g, b = colors[-1]
+        else:
+            # Interpolate between two colors
+            c1 = colors[segment_idx]
+            c2 = colors[segment_idx + 1]
+            r = int(c1[0] * (1 - segment_frac) + c2[0] * segment_frac)
+            g = int(c1[1] * (1 - segment_frac) + c2[1] * segment_frac)
+            b = int(c1[2] * (1 - segment_frac) + c2[2] * segment_frac)
+        
+        # Fill entire row with this color
+        for x in range(width):
+            pixels[x, y] = (r, g, b)
+    
+    return img
+
+
+def draw_rounded_rectangle(
+    draw: ImageDraw.Draw,
+    xy: Tuple[int, int, int, int],
+    radius: int,
+    fill: Optional[Tuple[int, int, int, int]] = None,
+    outline: Optional[Tuple[int, int, int, int]] = None,
+    width: int = 1,
+) -> None:
+    """
+    Draw a rounded rectangle.
+    
+    Args:
+        draw: ImageDraw instance
+        xy: Bounding box (x1, y1, x2, y2)
+        radius: Corner radius
+        fill: Fill color (RGBA)
+        outline: Outline color (RGBA)
+        width: Outline width
+    """
+    x1, y1, x2, y2 = xy
+    
+    # Ensure radius doesn't exceed half the smallest dimension
+    max_radius = min((x2 - x1) // 2, (y2 - y1) // 2)
+    radius = min(radius, max_radius)
+    
+    if fill:
+        # Draw main rectangle (center)
+        draw.rectangle(
+            [x1 + radius, y1, x2 - radius, y2],
+            fill=fill,
+            outline=None,
+        )
+        draw.rectangle(
+            [x1, y1 + radius, x2, y2 - radius],
+            fill=fill,
+            outline=None,
+        )
+        
+        # Draw rounded corners
+        # Top-left
+        draw.ellipse(
+            [x1, y1, x1 + 2 * radius, y1 + 2 * radius],
+            fill=fill,
+            outline=None,
+        )
+        # Top-right
+        draw.ellipse(
+            [x2 - 2 * radius, y1, x2, y1 + 2 * radius],
+            fill=fill,
+            outline=None,
+        )
+        # Bottom-left
+        draw.ellipse(
+            [x1, y2 - 2 * radius, x1 + 2 * radius, y2],
+            fill=fill,
+            outline=None,
+        )
+        # Bottom-right
+        draw.ellipse(
+            [x2 - 2 * radius, y2 - 2 * radius, x2, y2],
+            fill=fill,
+            outline=None,
+        )
+    
+    # Draw outline if specified
+    if outline and width > 0:
+        # Draw outline using multiple passes for width
+        for w in range(width):
+            offset = w
+            # Top edge
+            if y2 - y1 > 2 * (radius - offset):
+                draw.rectangle(
+                    [x1 + radius - offset, y1 + offset, x2 - radius + offset, y1 + offset + 1],
+                    fill=outline,
+                    outline=None,
+                )
+            # Bottom edge
+            if y2 - y1 > 2 * (radius - offset):
+                draw.rectangle(
+                    [x1 + radius - offset, y2 - offset - 1, x2 - radius + offset, y2 - offset],
+                    fill=outline,
+                    outline=None,
+                )
+            # Left edge
+            if x2 - x1 > 2 * (radius - offset):
+                draw.rectangle(
+                    [x1 + offset, y1 + radius - offset, x1 + offset + 1, y2 - radius + offset],
+                    fill=outline,
+                    outline=None,
+                )
+            # Right edge
+            if x2 - x1 > 2 * (radius - offset):
+                draw.rectangle(
+                    [x2 - offset - 1, y1 + radius - offset, x2 - offset, y2 - radius + offset],
+                    fill=outline,
+                    outline=None,
+                )
+            
+            # Draw corner arcs using ellipses
+            corner_radius = radius - offset
+            if corner_radius > 0:
+                # Top-left corner
+                draw.ellipse(
+                    [x1 + offset, y1 + offset, x1 + 2 * corner_radius + offset, y1 + 2 * corner_radius + offset],
+                    fill=None,
+                    outline=outline,
+                    width=1,
+                )
+                # Top-right corner
+                draw.ellipse(
+                    [x2 - 2 * corner_radius - offset, y1 + offset, x2 - offset, y1 + 2 * corner_radius + offset],
+                    fill=None,
+                    outline=outline,
+                    width=1,
+                )
+                # Bottom-left corner
+                draw.ellipse(
+                    [x1 + offset, y2 - 2 * corner_radius - offset, x1 + 2 * corner_radius + offset, y2 - offset],
+                    fill=None,
+                    outline=outline,
+                    width=1,
+                )
+                # Bottom-right corner
+                draw.ellipse(
+                    [x2 - 2 * corner_radius - offset, y2 - 2 * corner_radius - offset, x2 - offset, y2 - offset],
+                    fill=None,
+                    outline=outline,
+                    width=1,
+                )
+
+
+def draw_text_with_glow(
+    draw: ImageDraw.Draw,
+    text: str,
+    position: Tuple[int, int],
+    font: ImageFont.FreeTypeFont,
+    color: Tuple[int, int, int, int],
+    glow_color: Tuple[int, int, int, int],
+    glow_radius: int = 3,
+) -> None:
+    """
+    Draw text with glow effect using multiple shadow layers.
+    
+    Args:
+        draw: ImageDraw instance
+        text: Text to draw
+        position: (x, y) position
+        font: Font to use
+        color: Text color (RGBA)
+        glow_color: Glow color (RGBA)
+        glow_radius: Number of glow layers
+    """
+    x, y = position
+    
+    # Draw multiple glow layers (outer to inner)
+    for i in range(glow_radius, 0, -1):
+        alpha = int(glow_color[3] * (0.3 / i))
+        glow = (glow_color[0], glow_color[1], glow_color[2], alpha)
+        for dx in range(-i, i + 1):
+            for dy in range(-i, i + 1):
+                if dx * dx + dy * dy <= i * i:
+                    draw.text((x + dx, y + dy), text, fill=glow, font=font)
+    
+    # Draw main text
+    draw.text((x, y), text, fill=color, font=font)
+
+
+def blend_colors_gradient(
+    colors: List[str], width: int, height: int
+) -> Image.Image:
+    """
+    Create a diagonal gradient blend for multiple colors.
+    
+    Args:
+        colors: List of hex color codes
+        width: Gradient width
+        height: Gradient height
+    
+    Returns:
+        PIL Image with blended gradient
+    """
+    if len(colors) == 1:
+        rgb = hex_to_rgb(colors[0])
+        return Image.new("RGBA", (width, height), rgb + (255,))
+    
+    # Create gradient image
+    img = Image.new("RGBA", (width, height))
+    pixels = img.load()
+    
+    rgb_colors = [hex_to_rgb(c) for c in colors[:3]]  # Max 3 colors
+    
+    if len(rgb_colors) == 2:
+        # Diagonal gradient from top-left to bottom-right
+        for y in range(height):
+            for x in range(width):
+                # Calculate distance from corners
+                dist1 = (x / width + y / height) / 2
+                dist2 = 1 - dist1
+                
+                r = int(rgb_colors[0][0] * dist2 + rgb_colors[1][0] * dist1)
+                g = int(rgb_colors[0][1] * dist2 + rgb_colors[1][1] * dist1)
+                b = int(rgb_colors[0][2] * dist2 + rgb_colors[1][2] * dist1)
+                pixels[x, y] = (r, g, b, 255)
+    else:
+        # Three-color gradient: top-left, top-right, bottom
+        for y in range(height):
+            for x in range(width):
+                # Calculate barycentric coordinates
+                w1 = (1 - x / width) * (1 - y / height)
+                w2 = (x / width) * (1 - y / height)
+                w3 = y / height
+                
+                r = int(
+                    rgb_colors[0][0] * w1
+                    + rgb_colors[1][0] * w2
+                    + rgb_colors[2][0] * w3
+                )
+                g = int(
+                    rgb_colors[0][1] * w1
+                    + rgb_colors[1][1] * w2
+                    + rgb_colors[2][1] * w3
+                )
+                b = int(
+                    rgb_colors[0][2] * w1
+                    + rgb_colors[1][2] * w2
+                    + rgb_colors[2][2] * w3
+                )
+                pixels[x, y] = (r, g, b, 255)
+    
+    return img
+
+
 async def generate_calendar_image(
     year: int, month: int, is_history: bool = False
 ) -> BufferedInputFile:
     """
-    Generate a calendar image with colored days.
+    Generate a calendar image with colored days and enhanced graphics.
 
     Args:
         year: Year
@@ -275,15 +595,16 @@ async def generate_calendar_image(
         BufferedInputFile with the calendar image
     """
     # Image dimensions
-    cell_size = 80
-    header_height = 80
-    day_header_height = 40
-    padding = 20
+    cell_size = 90
+    header_height = 100
+    day_header_height = 50
+    padding = 30
     cols = 7
     rows = 6
-    legend_item_height = 30
-    legend_padding = 10
+    legend_item_height = 40
+    legend_padding = 15
     legend_cols = 2
+    corner_radius = 12
 
     # Get users first to calculate legend height (exclude hidden users)
     async with async_session_maker() as session:
@@ -293,7 +614,7 @@ async def generate_calendar_image(
     # Legend: 2 columns, calculate rows needed
     legend_rows = (num_users + legend_cols - 1) // legend_cols
     legend_height = (
-        legend_rows * legend_item_height + 2 * legend_padding + 40
+        legend_rows * legend_item_height + 2 * legend_padding + 50
     )  # Extra space for "Legend" header
 
     width = cols * cell_size + 2 * padding
@@ -305,29 +626,24 @@ async def generate_calendar_image(
         + legend_height
     )
 
-    # Load and prepare background image
-    # Get project root (two levels up from bot/services/calendar.py)
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-    bg_path = os.path.join(project_root, "assets", "coffee_dealer_bg.jpg")
-    try:
-        bg_img = Image.open(bg_path)
-        # Convert to RGB if needed
-        if bg_img.mode != "RGB":
-            bg_img = bg_img.convert("RGB")
-        # Resize/crop background to match calendar dimensions
-        bg_img = bg_img.resize((width, height), Image.Resampling.LANCZOS)
-        # Apply blur for glass effect
-        bg_img = bg_img.filter(ImageFilter.GaussianBlur(radius=18))
-        # Slightly increase brightness for better glass effect
-        enhancer = ImageEnhance.Brightness(bg_img)
-        bg_img = enhancer.enhance(1.1)
-    except Exception as e:
-        # Fallback to dark background if image can't be loaded
-        print(f"Warning: Could not load background image: {e}")
-        bg_img = Image.new("RGB", (width, height), color="#1e1e1e")
+    # Create dynamic seasonal gradient background
+    gradient_colors = get_seasonal_gradient(month)
+    bg_img = create_gradient_background(width, height, gradient_colors)
+    
+    # Apply enhanced blur for glass morphism effect
+    bg_img = bg_img.filter(ImageFilter.GaussianBlur(radius=25))
+    # Apply multiple blur passes for depth
+    bg_img = bg_img.filter(ImageFilter.GaussianBlur(radius=15))
+    
+    # Enhance brightness and contrast slightly
+    enhancer = ImageEnhance.Brightness(bg_img)
+    bg_img = enhancer.enhance(1.15)
+    enhancer = ImageEnhance.Contrast(bg_img)
+    bg_img = enhancer.enhance(1.1)
 
-    # Create glass overlay layer (semi-transparent white)
-    glass_overlay = Image.new("RGBA", (width, height), (255, 255, 255, 15))  # 15/255 ~6% opacity
+    # Create multiple glass overlay layers for enhanced glass morphism
+    glass_overlay_1 = Image.new("RGBA", (width, height), (255, 255, 255, 20))  # Base layer
+    glass_overlay_2 = Image.new("RGBA", (width, height), (255, 255, 255, 10))  # Subtle highlight
     
     # Create main image with background
     img = bg_img.copy()
@@ -336,35 +652,50 @@ async def generate_calendar_image(
     calendar_layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(calendar_layer)
 
-    # Try to use a nice font, fallback to default
-    try:
-        title_font = ImageFont.truetype(
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 32
-        )
-        day_font = ImageFont.truetype(
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 20
-        )
-        number_font = ImageFont.truetype(
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 24
-        )
-        legend_font = ImageFont.truetype(
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 18
-        )
-        legend_title_font = ImageFont.truetype(
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 22
-        )
-    except:
+    # Try to use modern fonts with fallbacks
+    font_paths = [
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+    ]
+    
+    title_font = None
+    day_font = None
+    number_font = None
+    legend_font = None
+    legend_title_font = None
+    
+    for font_path in font_paths:
+        try:
+            if title_font is None:
+                title_font = ImageFont.truetype(font_path, 38)
+            if day_font is None:
+                day_font = ImageFont.truetype(font_path, 22)
+            if number_font is None:
+                number_font = ImageFont.truetype(font_path, 28)
+            if legend_font is None:
+                legend_font = ImageFont.truetype(font_path, 20)
+            if legend_title_font is None:
+                legend_title_font = ImageFont.truetype(font_path, 24)
+            break
+        except:
+            continue
+    
+    # Fallback to default fonts
+    if title_font is None:
         title_font = ImageFont.load_default()
+    if day_font is None:
         day_font = ImageFont.load_default()
+    if number_font is None:
         number_font = ImageFont.load_default()
+    if legend_font is None:
         legend_font = ImageFont.load_default()
+    if legend_title_font is None:
         legend_title_font = ImageFont.load_default()
 
     # Create users_dict from already loaded users (hidden users already excluded)
     users_dict = {u.user_id: u for u in users}
-    
-    # Filter out hidden users from shifts when displaying
-    # (users_dict only contains visible users, so hidden users won't appear)
 
     # Get shifts data
     async with async_session_maker() as session:
@@ -377,45 +708,69 @@ async def generate_calendar_image(
         shifts = await get_shifts_in_range(session, first_day, last_day)
         shifts_dict = {s.date: s for s in shifts}
 
-    # Draw header
+    # Draw header with enhanced typography
     month_name_ukr = get_month_name_ukrainian(month)
     header_text = f"{month_name_ukr} {year}"
     if is_history:
         header_text += " (Історія)"
 
-    # Center the header text with shadow for readability on glass
+    # Center the header text with enhanced glow effect
     bbox = draw.textbbox((0, 0), header_text, font=title_font)
     text_width = bbox[2] - bbox[0]
     text_x = (width - text_width) // 2
-    # Draw text shadow
-    draw.text((text_x + 2, padding + 2), header_text, fill=(0, 0, 0, 150), font=title_font)
-    # Draw text
-    draw.text((text_x, padding), header_text, fill=(255, 255, 255, 255), font=title_font)
+    text_y = padding + 10
+    
+    # Draw text with glow
+    draw_text_with_glow(
+        draw,
+        header_text,
+        (text_x, text_y),
+        title_font,
+        (255, 255, 255, 255),
+        (0, 0, 0, 200),
+        glow_radius=4,
+    )
 
-    # Draw day headers
+    # Draw day headers with enhanced glass effect
     y_start = header_height + padding
     for i, day_abbr in enumerate(UKRAINIAN_DAYS):
         x = padding + i * cell_size
         y = y_start
-        # Draw header cell with glass effect
-        # Semi-transparent background
-        draw.rectangle(
-            [x, y, x + cell_size, y + day_header_height], 
-            fill=(255, 255, 255, 30),  # Semi-transparent white
-            outline=(255, 255, 255, 100),  # Semi-transparent border
-            width=2
+        
+        # Draw rounded header cell with enhanced glass effect
+        draw_rounded_rectangle(
+            draw,
+            (x, y, x + cell_size, y + day_header_height),
+            radius=8,
+            fill=(255, 255, 255, 40),  # More visible glass
+            outline=(255, 255, 255, 150),
+            width=2,
         )
-        # Center text with shadow
+        
+        # Add glass highlight
+        highlight_y = y + 2
+        draw.rectangle(
+            [x + 2, highlight_y, x + cell_size - 2, highlight_y + 6],
+            fill=(255, 255, 255, 60),
+        )
+        
+        # Center text with glow
         bbox = draw.textbbox((0, 0), day_abbr, font=day_font)
         text_width = bbox[2] - bbox[0]
-        text_x = x + (cell_size - text_width) // 2
-        text_y = y + (day_header_height - (bbox[3] - bbox[1])) // 2
-        # Text shadow
-        draw.text((text_x + 1, text_y + 1), day_abbr, fill=(0, 0, 0, 100), font=day_font)
-        # Text
-        draw.text((text_x, text_y), day_abbr, fill=(255, 255, 255, 220), font=day_font)
+        text_x_pos = x + (cell_size - text_width) // 2
+        text_y_pos = y + (day_header_height - (bbox[3] - bbox[1])) // 2
+        
+        draw_text_with_glow(
+            draw,
+            day_abbr,
+            (text_x_pos, text_y_pos),
+            day_font,
+            (255, 255, 255, 240),
+            (0, 0, 0, 120),
+            glow_radius=2,
+        )
 
-    # Draw calendar grid
+    # Draw calendar grid with enhanced cells
     first_weekday = first_day.weekday()  # 0=Monday
     today = date.today()
     y_start += day_header_height
@@ -427,23 +782,41 @@ async def generate_calendar_image(
             y = y_start + row * cell_size
 
             if row == 0 and col < first_weekday:
-                # Empty cell before month starts (transparent)
-                draw.rectangle(
-                    [x, y, x + cell_size, y + cell_size], 
-                    fill=(0, 0, 0, 0),
-                    outline=(255, 255, 255, 30), 
-                    width=1
+                # Empty cell before month starts - subtle pattern
+                draw_rounded_rectangle(
+                    draw,
+                    (x, y, x + cell_size, y + cell_size),
+                    radius=corner_radius,
+                    fill=(255, 255, 255, 15),
+                    outline=(255, 255, 255, 40),
+                    width=1,
                 )
+                # Add subtle diagonal pattern
+                for i in range(0, cell_size, 8):
+                    draw.line(
+                        [(x + i, y), (x, y + i)],
+                        fill=(255, 255, 255, 10),
+                        width=1,
+                    )
                 continue
 
             if day_num > last_day_num:
-                # Empty cell after month ends (transparent)
-                draw.rectangle(
-                    [x, y, x + cell_size, y + cell_size], 
-                    fill=(0, 0, 0, 0),
-                    outline=(255, 255, 255, 30), 
-                    width=1
+                # Empty cell after month ends - subtle pattern
+                draw_rounded_rectangle(
+                    draw,
+                    (x, y, x + cell_size, y + cell_size),
+                    radius=corner_radius,
+                    fill=(255, 255, 255, 15),
+                    outline=(255, 255, 255, 40),
+                    width=1,
                 )
+                # Add subtle diagonal pattern
+                for i in range(0, cell_size, 8):
+                    draw.line(
+                        [(x + i, y), (x, y + i)],
+                        fill=(255, 255, 255, 10),
+                        width=1,
+                    )
                 continue
 
             current_date = date(year, month, day_num)
@@ -459,169 +832,285 @@ async def generate_calendar_image(
                 if user and user.color_code:
                     colors.append(user.color_code)
 
-            # Draw cell background with glass effect
+            # Create cell background with enhanced color blending
             if colors:
-                # Use first color, or blend if multiple
-                if len(colors) == 1:
-                    bg_rgb = hex_to_rgb(colors[0])
+                # Create gradient blend for multiple colors
+                if len(colors) > 1:
+                    color_gradient = blend_colors_gradient(colors, cell_size, cell_size)
+                    # Apply saturation boost
+                    enhancer = ImageEnhance.Color(color_gradient)
+                    color_gradient = enhancer.enhance(1.2)
+                    # Make semi-transparent (~85% opacity)
+                    alpha = color_gradient.split()[3]
+                    # Adjust alpha channel using point() method
+                    alpha = alpha.point(lambda p: int(p * 0.85))
+                    color_gradient.putalpha(alpha)
+                    
+                    # Paste gradient onto calendar layer
+                    calendar_layer.paste(color_gradient, (x, y), color_gradient)
+                    bg_rgb = hex_to_rgb(colors[0])  # For text color calculation
                 else:
-                    # Blend colors (simple average)
-                    rgb_colors = [hex_to_rgb(c) for c in colors[:3]]  # Max 3 colors
-                    bg_rgb = tuple(
-                        sum(c[i] for c in rgb_colors) // len(rgb_colors)
-                        for i in range(3)
+                    bg_rgb = hex_to_rgb(colors[0])
+                    # Enhance saturation
+                    r, g, b = bg_rgb
+                    # Boost saturation
+                    max_val = max(r, g, b)
+                    if max_val > 0:
+                        r = min(255, int(r * 1.15))
+                        g = min(255, int(g * 1.15))
+                        b = min(255, int(b * 1.15))
+                    bg_rgb = (r, g, b)
+                    bg_color = bg_rgb + (215,)  # Semi-transparent with glass effect
+                    
+                    # Draw rounded cell
+                    draw_rounded_rectangle(
+                        draw,
+                        (x, y, x + cell_size, y + cell_size),
+                        radius=corner_radius,
+                        fill=bg_color,
+                        outline=(255, 255, 255, 150),
+                        width=2,
                     )
-                # Semi-transparent color with glass effect (alpha ~200/255 ~78%)
-                bg_color = bg_rgb + (200,)
             else:
-                # Empty cell - very transparent white
-                bg_color = (255, 255, 255, 40)  # Very transparent white
-
-            # Draw cell with glass effect
-            draw.rectangle(
-                [x, y, x + cell_size, y + cell_size],
-                fill=bg_color,
-                outline=(255, 255, 255, 120),  # Semi-transparent white border
-                width=2,
-            )
-            
-            # Add glass highlight on top-left edge
-            highlight_points = [
-                (x + 2, y + 2),
-                (x + cell_size - 2, y + 2),
-                (x + cell_size - 2, y + 8),
-                (x + 2, y + 8),
-            ]
-            draw.polygon(highlight_points, fill=(255, 255, 255, 40))
-
-            # Highlight today with glass effect
-            if current_date == today and not is_history:
-                # Draw glowing border highlight
-                draw.rectangle(
-                    [x + 1, y + 1, x + cell_size - 1, y + cell_size - 1],
-                    outline=(0, 255, 0, 200),  # Semi-transparent green
-                    width=3,
-                )
-                # Add inner glow
-                draw.rectangle(
-                    [x + 3, y + 3, x + cell_size - 3, y + cell_size - 3],
-                    outline=(0, 255, 0, 100),
+                # Empty cell - subtle glass effect
+                bg_rgb = (200, 200, 200)
+                bg_color = (255, 255, 255, 50)
+                draw_rounded_rectangle(
+                    draw,
+                    (x, y, x + cell_size, y + cell_size),
+                    radius=corner_radius,
+                    fill=bg_color,
+                    outline=(255, 255, 255, 60),
                     width=1,
                 )
 
-            # Draw day number
+            # Add enhanced glass highlights and shadows
+            if colors:
+                # Top highlight
+                highlight_y = y + 2
+                draw.rectangle(
+                    [x + 3, highlight_y, x + cell_size - 3, highlight_y + 8],
+                    fill=(255, 255, 255, 50),
+                )
+                
+                # Bottom shadow for depth
+                shadow_y = y + cell_size - 4
+                draw.rectangle(
+                    [x + 3, shadow_y, x + cell_size - 3, y + cell_size - 1],
+                    fill=(0, 0, 0, 30),
+                )
+                
+                # Left highlight
+                draw.rectangle(
+                    [x + 2, y + 3, x + 6, y + cell_size - 3],
+                    fill=(255, 255, 255, 40),
+                )
+
+            # Enhanced "today" highlight with glow effect
+            if current_date == today and not is_history:
+                # Multiple glow layers for pulsing effect
+                glow_colors = [
+                    (0, 255, 100, 180),  # Outer glow
+                    (0, 255, 120, 140),  # Mid glow
+                    (0, 255, 140, 100),  # Inner glow
+                ]
+                
+                for i, glow_color in enumerate(glow_colors):
+                    offset = 2 + i * 2
+                    draw_rounded_rectangle(
+                        draw,
+                        (
+                            x - offset,
+                            y - offset,
+                            x + cell_size + offset,
+                            y + cell_size + offset,
+                        ),
+                        radius=corner_radius + offset,
+                        fill=None,
+                        outline=glow_color,
+                        width=3 - i,
+                    )
+                
+                # Inner highlight ring
+                draw_rounded_rectangle(
+                    draw,
+                    (x + 4, y + 4, x + cell_size - 4, y + cell_size - 4),
+                    radius=corner_radius - 2,
+                    fill=None,
+                    outline=(0, 255, 150, 200),
+                    width=2,
+                )
+
+            # Draw day number with enhanced typography
             day_str = str(day_num)
             bbox = draw.textbbox((0, 0), day_str, font=number_font)
             text_width = bbox[2] - bbox[0]
             text_height = bbox[3] - bbox[1]
-            text_x = x + (cell_size - text_width) // 2
-            text_y = y + (cell_size - text_height) // 2
+            text_x_pos = x + (cell_size - text_width) // 2
+            text_y_pos = y + (cell_size - text_height) // 2
 
-            # Use white or black text with shadow for readability on glass
+            # Determine text color based on background brightness
             if colors:
                 brightness = sum(bg_rgb) / 3
-                if brightness > 128:
-                    # Light background - use dark text with shadow
-                    text_color = (0, 0, 0, 255)
-                    shadow_color = (255, 255, 255, 150)
+                if brightness > 140:
+                    text_color = (20, 20, 20, 255)
+                    glow_color = (255, 255, 255, 180)
                 else:
-                    # Dark background - use light text with shadow
                     text_color = (255, 255, 255, 255)
-                    shadow_color = (0, 0, 0, 150)
+                    glow_color = (0, 0, 0, 180)
             else:
                 text_color = (255, 255, 255, 255)
-                shadow_color = (0, 0, 0, 150)
+                glow_color = (0, 0, 0, 150)
 
-            # Draw text shadow
-            draw.text((text_x + 1, text_y + 1), day_str, fill=shadow_color, font=number_font)
-            # Draw text
-            draw.text((text_x, text_y), day_str, fill=text_color, font=number_font)
+            # Draw text with glow
+            draw_text_with_glow(
+                draw,
+                day_str,
+                (text_x_pos, text_y_pos),
+                number_font,
+                text_color,
+                glow_color,
+                glow_radius=3,
+            )
 
-            # Draw user indicators (small dots for multiple users) with glass effect
+            # Draw user indicators (enhanced dots for multiple users)
             if len(colors) > 1:
-                dot_size = 6
-                dot_spacing = 8
-                start_x = x + cell_size - 10
-                start_y = y + 5
+                dot_size = 7
+                dot_spacing = 10
+                start_x = x + cell_size - 12
+                start_y = y + 8
                 for i, color in enumerate(colors[:3]):  # Max 3 dots
                     dot_rgb = hex_to_rgb(color)
-                    dot_color = dot_rgb + (220,)  # Semi-transparent
+                    # Enhance dot color
+                    dot_rgb = tuple(min(255, int(c * 1.2)) for c in dot_rgb)
+                    dot_color = dot_rgb + (240,)
                     dot_y = start_y + i * dot_spacing
+                    
+                    # Draw dot with glow
                     draw.ellipse(
-                        [start_x - dot_size, dot_y, start_x, dot_y + dot_size],
+                        [
+                            start_x - dot_size,
+                            dot_y,
+                            start_x,
+                            dot_y + dot_size,
+                        ],
                         fill=dot_color,
-                        outline=(255, 255, 255, 180),
-                        width=1,
+                        outline=(255, 255, 255, 200),
+                        width=2,
+                    )
+                    # Add inner highlight
+                    draw.ellipse(
+                        [
+                            start_x - dot_size + 2,
+                            dot_y + 2,
+                            start_x - 2,
+                            dot_y + dot_size - 2,
+                        ],
+                        fill=(255, 255, 255, 100),
                     )
 
             day_num += 1
 
-    # Draw legend
+    # Draw enhanced legend with modern card design
     legend_y_start = (
-        header_height + day_header_height + rows * cell_size + 2 * padding + 10
+        header_height + day_header_height + rows * cell_size + 2 * padding + 20
     )
     legend_x_start = padding
 
-    # Draw legend title with glass effect
+    # Draw legend title with enhanced typography
     legend_title = "Легенда:"
     bbox = draw.textbbox((0, 0), legend_title, font=legend_title_font)
-    # Text shadow
-    draw.text(
-        (legend_x_start + 1, legend_y_start + 1),
+    text_x_pos = legend_x_start
+    text_y_pos = legend_y_start
+    
+    draw_text_with_glow(
+        draw,
         legend_title,
-        fill=(0, 0, 0, 150),
-        font=legend_title_font,
+        (text_x_pos, text_y_pos),
+        legend_title_font,
+        (255, 255, 255, 255),
+        (0, 0, 0, 180),
+        glow_radius=3,
     )
-    # Text
-    draw.text(
-        (legend_x_start, legend_y_start),
-        legend_title,
-        fill=(255, 255, 255, 255),
-        font=legend_title_font,
-    )
-    legend_y_start += 30
+    legend_y_start += 40
 
-    # Draw legend items
-    legend_item_width = (width - 2 * padding) // legend_cols
+    # Draw legend items with modern card design
+    legend_item_width = (width - 2 * padding - 10) // legend_cols
     for idx, user in enumerate(users):
         col = idx % legend_cols
         row = idx // legend_cols
 
-        x = legend_x_start + col * legend_item_width
-        y = legend_y_start + row * legend_item_height
+        card_x = legend_x_start + col * (legend_item_width + 10)
+        card_y = legend_y_start + row * (legend_item_height + 8)
 
-        # Draw color box
-        color_box_size = 20
-        color_x = x
-        color_y = y + (legend_item_height - color_box_size) // 2
+        # Draw glass morphism card background
+        draw_rounded_rectangle(
+            draw,
+            (
+                card_x,
+                card_y,
+                card_x + legend_item_width,
+                card_y + legend_item_height,
+            ),
+            radius=10,
+            fill=(255, 255, 255, 30),
+            outline=(255, 255, 255, 100),
+            width=2,
+        )
+        
+        # Add card highlight
+        draw.rectangle(
+            [card_x + 2, card_y + 2, card_x + legend_item_width - 2, card_y + 6],
+            fill=(255, 255, 255, 40),
+        )
+
+        # Draw enhanced color swatch
+        color_box_size = 28
+        color_x = card_x + 12
+        color_y = card_y + (legend_item_height - color_box_size) // 2
 
         if user.color_code:
             color_rgb = hex_to_rgb(user.color_code)
-            color_with_alpha = color_rgb + (220,)  # Semi-transparent
+            # Enhance saturation
+            color_rgb = tuple(min(255, int(c * 1.15)) for c in color_rgb)
+            color_with_alpha = color_rgb + (240,)
         else:
-            color_rgb = (128, 128, 128)  # Grey for no color
-            color_with_alpha = color_rgb + (220,)
+            color_rgb = (128, 128, 128)
+            color_with_alpha = color_rgb + (240,)
 
-        # Draw color box with glass effect
-        draw.rectangle(
-            [color_x, color_y, color_x + color_box_size, color_y + color_box_size],
+        # Draw rounded color box with gradient effect
+        draw_rounded_rectangle(
+            draw,
+            (
+                color_x,
+                color_y,
+                color_x + color_box_size,
+                color_y + color_box_size,
+            ),
+            radius=6,
             fill=color_with_alpha,
-            outline=(255, 255, 255, 200),
-            width=1,
+            outline=(255, 255, 255, 220),
+            width=2,
         )
-        # Add highlight
+        
+        # Add highlight to color box
         draw.rectangle(
-            [color_x + 1, color_y + 1, color_x + color_box_size - 1, color_y + 3],
-            fill=(255, 255, 255, 60),
+            [
+                color_x + 2,
+                color_y + 2,
+                color_x + color_box_size - 2,
+                color_y + 6,
+            ],
+            fill=(255, 255, 255, 80),
         )
 
-        # Draw user name with shadow for readability
+        # Draw user name with enhanced typography
         name_text = user.name
-        text_x = color_x + color_box_size + 8
-        text_y = y + (legend_item_height - 18) // 2  # Approximate text height
+        text_x_pos = color_x + color_box_size + 12
+        text_y_pos = card_y + (legend_item_height - 20) // 2
 
         # Truncate name if too long
-        max_width = legend_item_width - color_box_size - 20
+        max_width = legend_item_width - color_box_size - 30
         name_bbox = draw.textbbox((0, 0), name_text, font=legend_font)
         if name_bbox[2] - name_bbox[0] > max_width:
             # Truncate with ellipsis
@@ -635,30 +1124,36 @@ async def generate_calendar_image(
             if not name_text.endswith("..."):
                 name_text = name_text[: max(1, len(name_text) - 3)] + "..."
 
-        # Text shadow
-        draw.text((text_x + 1, text_y + 1), name_text, fill=(0, 0, 0, 150), font=legend_font)
-        # Text
-        draw.text((text_x, text_y), name_text, fill=(255, 255, 255, 255), font=legend_font)
+        # Draw text with glow
+        draw_text_with_glow(
+            draw,
+            name_text,
+            (text_x_pos, text_y_pos),
+            legend_font,
+            (255, 255, 255, 255),
+            (0, 0, 0, 150),
+            glow_radius=2,
+        )
 
-    # Composite all layers: background -> glass overlay -> calendar content
+    # Composite all layers: background -> glass overlays -> calendar content
     # Start with background (convert to RGBA for compositing)
     final_img = bg_img.convert("RGBA")
     
-    # Apply glass overlay
-    final_img = Image.alpha_composite(final_img, glass_overlay)
+    # Apply glass overlays
+    final_img = Image.alpha_composite(final_img, glass_overlay_1)
+    final_img = Image.alpha_composite(final_img, glass_overlay_2)
     
     # Add calendar content layer
     final_img = Image.alpha_composite(final_img, calendar_layer)
     
     # Convert back to RGB for final output
-    # Paste onto the blurred background to preserve the glass effect
-    rgb_img = bg_img.copy()
-    rgb_img.paste(final_img, mask=final_img.split()[3])  # Use alpha channel as mask
+    rgb_img = Image.new("RGB", (width, height), (0, 0, 0))
+    rgb_img.paste(final_img, mask=final_img.split()[3])
     final_img = rgb_img
 
     # Convert to bytes
     img_buffer = io.BytesIO()
-    final_img.save(img_buffer, format="PNG")
+    final_img.save(img_buffer, format="PNG", optimize=True)
     img_buffer.seek(0)
 
     return BufferedInputFile(
