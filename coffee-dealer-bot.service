@@ -1,0 +1,25 @@
+[Unit]
+Description=Telegram Shift Calendar Bot (Coffee Dealer)
+After=network.target
+
+[Service]
+Type=simple
+User=thathunky
+Group=thathunky
+WorkingDirectory=/home/thathunky/coffee_dealer
+Environment="PATH=/home/thathunky/coffee_dealer/venv/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart=/home/thathunky/coffee_dealer/venv/bin/python -m bot.main
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=coffee-dealer-bot
+
+# Environment variables (optional - can also use .env file)
+# Environment="BOT_TOKEN=your_token_here"
+# Environment="GEMINI_API_KEY=your_key_here"
+# Environment="ADMIN_IDS=123456789,987654321"
+
+[Install]
+WantedBy=multi-user.target
+
